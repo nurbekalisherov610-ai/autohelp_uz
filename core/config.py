@@ -2,10 +2,12 @@
 AutoHelp.uz - Core Configuration Module
 Loads all settings from environment variables with validation.
 """
+import json
 from pathlib import Path
-from typing import List
+from typing import Annotated, List
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
 
 
 class Settings(BaseSettings):
@@ -15,11 +17,12 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        env_ignore_empty=True,
     )
 
     # ── Telegram Bot ──────────────────────────────────────────────
     bot_token: str
-    admin_ids: List[int] = []
+    admin_ids: Annotated[List[int], NoDecode] = []
     dispatcher_group_id: int = 0
     video_channel_id: int = 0
 
@@ -56,6 +59,44 @@ class Settings(BaseSettings):
     # ── Logging ───────────────────────────────────────────────────
     log_level: str = "INFO"
     log_file: str = "logs/autohelp.log"
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def parse_admin_ids(cls, value):
+        """
+        Accepts ADMIN_IDS in multiple formats:
+        - JSON list: [123, 456]
+        - CSV string: 123,456
+        - Single int/string: 123
+        """
+        if value is None:
+            return []
+
+        if isinstance(value, list):
+            return value
+
+        if isinstance(value, int):
+            return [value]
+
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+
+            # JSON list style
+            if raw.startswith("[") and raw.endswith("]"):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+
+            # CSV / single value style
+            parts = [p.strip() for p in raw.split(",") if p.strip()]
+            return [int(p) for p in parts]
+
+        return value
 
     @property
     def get_database_url(self) -> str:

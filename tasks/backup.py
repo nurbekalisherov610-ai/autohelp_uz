@@ -3,9 +3,10 @@ AutoHelp.uz - Backup Task
 Daily PostgreSQL backup at 03:00 with retention management.
 """
 import asyncio
-import subprocess
+import os
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -21,17 +22,34 @@ async def run_daily_backup(bot):
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"autohelp_backup_{timestamp}.sql.gz"
+    filename = f"autohelp_backup_{timestamp}.backup"
     filepath = backup_dir / filename
 
     # Build pg_dump command
-    env = {
-        "PGPASSWORD": settings.db_password,
-        "PATH": "/usr/bin:/usr/local/bin",
-    }
+    db_host = settings.db_host
+    db_port = settings.db_port
+    db_user = settings.db_user
+    db_name = settings.db_name
+    db_password = settings.db_password
+
+    # If DATABASE_URL is present (Railway-style), prefer parsed values.
+    if os.getenv("DATABASE_URL") or settings.database_url:
+        parsed = urlparse(
+            settings.get_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+        )
+        db_host = parsed.hostname or db_host
+        db_port = parsed.port or db_port
+        db_user = parsed.username or db_user
+        db_name = (parsed.path or "").lstrip("/") or db_name
+        db_password = parsed.password or db_password
+
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db_password
+    if settings.db_ssl or "sslmode=require" in settings.database_url_sync:
+        env["PGSSLMODE"] = "require"
     cmd = (
-        f"pg_dump -h {settings.db_host} -p {settings.db_port} "
-        f"-U {settings.db_user} -d {settings.db_name} "
+        f"pg_dump -h {db_host} -p {db_port} "
+        f"-U {db_user} -d {db_name} "
         f"--format=custom --compress=9 -f {filepath}"
     )
 

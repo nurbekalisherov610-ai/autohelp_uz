@@ -5,6 +5,7 @@ Handles order management, master assignment, and video confirmations.
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.filters.role_filter import RoleFilter
@@ -14,6 +15,7 @@ from bot.keyboards.dispatcher_kb import (
     master_selection_keyboard, dispatcher_confirm_completion,
 )
 from locales.texts import t
+from core.config import settings
 from models.order import OrderStatus, PROBLEM_LABELS
 from models.staff import Staff
 from services.order_service import OrderService
@@ -49,12 +51,13 @@ async def show_active_orders(
     session: AsyncSession,
 ):
     """Show all active orders."""
+    await callback.answer("📋 Yuklanmoqda...")
+
     order_repo = OrderRepo(session)
     orders = await order_repo.get_active_orders()
 
     if not orders:
         await callback.message.edit_text("✅ Hozircha faol buyurtmalar yo'q.")
-        await callback.answer()
         return
 
     lines = ["📋 <b>Faol buyurtmalar:</b>\n"]
@@ -78,7 +81,6 @@ async def show_active_orders(
         "\n".join(lines),
         parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.callback_query(
@@ -90,12 +92,13 @@ async def show_masters_status(
     session: AsyncSession,
 ):
     """Show status of all masters."""
+    await callback.answer("👨‍🔧 Yuklanmoqda...")
+
     master_repo = MasterRepo(session)
     masters = await master_repo.get_all_active()
 
     if not masters:
         await callback.message.edit_text("Hech qanday usta topilmadi.")
-        await callback.answer()
         return
 
     status_icons = {"online": "🟢", "busy": "🟡", "offline": "🔴"}
@@ -111,7 +114,6 @@ async def show_masters_status(
         "\n".join(lines),
         parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.callback_query(
@@ -123,6 +125,8 @@ async def show_today_stats(
     session: AsyncSession,
 ):
     """Show today's statistics for dispatcher."""
+    await callback.answer("📊 Yuklanmoqda...")
+
     stats_repo = StatsRepo(session)
     stats = await stats_repo.get_dashboard_stats()
 
@@ -136,7 +140,59 @@ async def show_today_stats(
     )
 
     await callback.message.edit_text(text, parse_mode="HTML")
-    await callback.answer()
+
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data == "disp:sla_alerts",
+)
+async def show_sla_alerts(
+    callback: CallbackQuery,
+    session: AsyncSession,
+):
+    """Show current SLA breach counters and recent breached orders."""
+    await callback.answer("⚠️ SLA holati yuklanmoqda...")
+
+    order_repo = OrderRepo(session)
+    assign_violations = await order_repo.get_sla_violations(
+        status=OrderStatus.ASSIGNED,
+        timeout_minutes=settings.sla_assign_timeout,
+    )
+    on_the_way_violations = await order_repo.get_sla_violations(
+        status=OrderStatus.ON_THE_WAY,
+        timeout_minutes=settings.sla_on_the_way_timeout,
+    )
+    confirm_violations = await order_repo.get_sla_violations(
+        status=OrderStatus.AWAITING_CONFIRM,
+        timeout_minutes=settings.sla_confirm_timeout,
+    )
+
+    total = (
+        len(assign_violations)
+        + len(on_the_way_violations)
+        + len(confirm_violations)
+    )
+
+    lines = [
+        "⚠️ <b>SLA ogohlantirishlar</b>\n",
+        f"• ASSIGNED > {settings.sla_assign_timeout} daqiqa: <b>{len(assign_violations)}</b>",
+        f"• ON_THE_WAY > {settings.sla_on_the_way_timeout} daqiqa: <b>{len(on_the_way_violations)}</b>",
+        f"• AWAITING_CONFIRM > {settings.sla_confirm_timeout} daqiqa: <b>{len(confirm_violations)}</b>",
+    ]
+
+    if total:
+        lines.append("\n<b>So'nggi muammoli buyurtmalar:</b>")
+        merged = (
+            [("ASSIGNED", o) for o in assign_violations[:3]]
+            + [("ON_THE_WAY", o) for o in on_the_way_violations[:3]]
+            + [("AWAITING_CONFIRM", o) for o in confirm_violations[:3]]
+        )[:8]
+        for label, order in merged:
+            lines.append(f"• <code>{order.order_uid}</code> — {label}")
+    else:
+        lines.append("\n✅ Hozircha SLA buzilishlari yo'q.")
+
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML")
 
 
 # ── Assign master to order ────────────────────────────────────────
@@ -368,6 +424,14 @@ async def confirm_order_completion(
         await callback.answer(str(e), show_alert=True)
         return
 
+    if order:
+        from models.payment import Payment
+        await session.execute(
+            update(Payment)
+            .where(Payment.order_id == order.id)
+            .values(confirmed_by_dispatcher=True)
+        )
+
     await callback.message.edit_text(
         f"✅ Buyurtma <code>{order_uid}</code> tasdiqlandi va tugallandi!",
         parse_mode="HTML",
@@ -398,6 +462,80 @@ async def confirm_order_completion(
 
 
 # ── Cancel order as dispatcher ────────────────────────────────────
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_edit_amount:"),
+)
+async def start_edit_amount(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    """Start payment amount edit flow for an awaiting confirmation order."""
+    order_uid = callback.data.split(":")[1]
+    await state.update_data(edit_amount_order_uid=order_uid)
+    await state.set_state(DispatcherOrderStates.editing_amount)
+
+    await callback.message.edit_text(
+        f"✏️ <b>{order_uid}</b> uchun yangi summani kiriting (so'm):\n\n"
+        f"Masalan: <code>180000</code>",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(
+    DispatcherOrderStates.editing_amount,
+    F.text,
+)
+async def process_edit_amount(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+):
+    """Apply edited amount to both order and payment records."""
+    data = await state.get_data()
+    order_uid = data.get("edit_amount_order_uid")
+    if not order_uid:
+        await state.clear()
+        await message.answer("❌ Buyurtma topilmadi. Qaytadan urinib ko'ring.")
+        return
+
+    try:
+        clean = message.text.replace(" ", "").replace(",", "").replace(".", "")
+        amount = float(clean)
+        if amount <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.answer(
+            "⚠️ Iltimos, summani to'g'ri kiriting (faqat raqam).\n"
+            "Masalan: 180000"
+        )
+        return
+
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await state.clear()
+        await message.answer("❌ Buyurtma topilmadi.")
+        return
+
+    await order_repo.set_payment_amount(order_uid, amount)
+
+    from models.payment import Payment
+    await session.execute(
+        update(Payment)
+        .where(Payment.order_id == order.id)
+        .values(amount=amount)
+    )
+
+    await state.clear()
+    await message.answer(
+        f"✅ Buyurtma <code>{order_uid}</code> summasi yangilandi: "
+        f"<b>{amount:,.0f} so'm</b>",
+        parse_mode="HTML",
+    )
+
 
 @router.callback_query(
     RoleFilter("dispatcher", "admin", "super_admin"),

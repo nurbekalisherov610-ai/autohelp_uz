@@ -67,12 +67,20 @@ class OrderService:
         if active_order:
             raise ValueError("Master already has an active order")
 
+        order_before = await self.order_repo.get_by_uid(order_uid)
+        if not order_before:
+            raise ValueError(f"Order {order_uid} not found")
+        if order_before.status != OrderStatus.NEW:
+            raise ValueError("Only NEW orders can be assigned")
+
         order = await self.order_repo.assign_master(
             order_uid=order_uid,
             master_id=master_id,
             dispatcher_id=dispatcher_id,
             dispatcher_telegram_id=dispatcher_telegram_id,
         )
+        if not order:
+            raise ValueError(f"Order {order_uid} not found")
 
         # Audit log
         self.session.add(AuditLog(
@@ -105,6 +113,7 @@ class OrderService:
         order = await self.order_repo.get_by_uid(order_uid)
         if not order:
             raise ValueError(f"Order {order_uid} not found")
+        old_status = order.status
 
         # Validate status transition
         valid_transitions = {
@@ -123,7 +132,7 @@ class OrderService:
         allowed = valid_transitions.get(order.status, [])
         if new_status not in allowed:
             raise ValueError(
-                f"Invalid status transition: {order.status} → {new_status}"
+                f"Invalid status transition: {order.status} -> {new_status}"
             )
 
         updated = await self.order_repo.update_status(
@@ -141,7 +150,7 @@ class OrderService:
             await self.master_repo.increment_stats(order.master_id, rejected=True)
 
         logger.info(
-            f"Order {order_uid} status: {order.status} → {new_status} "
+            f"Order {order_uid} status: {old_status} -> {new_status} "
             f"by {changed_by_role} ({changed_by_telegram_id})"
         )
         return updated
@@ -157,6 +166,10 @@ class OrderService:
         order = await self.order_repo.get_by_uid(order_uid)
         if not order:
             raise ValueError(f"Order {order_uid} not found")
+        if order.status != OrderStatus.IN_PROGRESS:
+            raise ValueError("Order must be IN_PROGRESS before completion flow")
+        if order.payment:
+            raise ValueError("Payment already exists for this order")
 
         # Set payment amount
         await self.order_repo.set_payment_amount(order_uid, amount)
@@ -238,3 +251,4 @@ class OrderService:
 
         logger.info(f"Review added for order {order_uid}: {rating} stars")
         return review
+

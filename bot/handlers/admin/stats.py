@@ -10,7 +10,7 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.orm import selectinload
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -617,3 +617,76 @@ async def admin_dispatchers(callback: CallbackQuery, session: AsyncSession):
     await callback.message.edit_text(
         "\n".join(lines), parse_mode="HTML", reply_markup=admin_back_button()
     )
+
+@router.callback_query(
+    RoleFilter("admin", "super_admin"),
+    F.data.startswith("admin_master_stats:"),
+)
+async def admin_master_stats_view(callback: CallbackQuery, session: AsyncSession):
+    """Detailed view and actions for a specific master."""
+    master_id = int(callback.data.split(":")[1])
+    master_repo = MasterRepo(session)
+    master = await master_repo.get_by_id(master_id)
+
+    if not master:
+        await callback.answer("Usta topilmadi", show_alert=True)
+        return
+
+    stats = await master_repo.get_master_stats(master.id)
+    text = (
+        f"👨‍🔧 <b>{master.full_name}</b>\n\n"
+        f"📞 {master.phone}\n"
+        f"📶 Holat: <b>{master.status.value}</b>\n"
+        f"⭐ Reyting: <b>{master.rating:.1f}</b>\n"
+        f"📋 Jami ishlar: <b>{stats['total_orders']}</b>\n"
+        f"✅ Bajarilgan: <b>{stats['completed_orders']}</b>\n"
+        f"💰 Tushum: <b>{stats['total_sum']:,.0f} so'm</b>\n"
+        f"🟢 Aktiv: <b>{'Ha' if master.is_active else 'Yo‘q'}</b>"
+    )
+
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=admin_master_actions(master.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    RoleFilter("admin", "super_admin"),
+    F.data.startswith("admin_master_activate:"),
+)
+async def admin_master_activate(callback: CallbackQuery, session: AsyncSession):
+    """Activate a master account."""
+    master_id = int(callback.data.split(":")[1])
+    await session.execute(
+        update(Master)
+        .where(Master.id == master_id)
+        .values(is_active=True)
+    )
+    await callback.answer("✅ Usta faollashtirildi")
+
+    # Refresh card
+    callback.data = f"admin_master_stats:{master_id}"
+    await admin_master_stats_view(callback, session)
+
+
+@router.callback_query(
+    RoleFilter("admin", "super_admin"),
+    F.data.startswith("admin_master_deactivate:"),
+)
+async def admin_master_deactivate(callback: CallbackQuery, session: AsyncSession):
+    """Deactivate a master account."""
+    master_id = int(callback.data.split(":")[1])
+    from models.master import MasterStatus
+
+    await session.execute(
+        update(Master)
+        .where(Master.id == master_id)
+        .values(is_active=False, status=MasterStatus.OFFLINE)
+    )
+    await callback.answer("🚫 Usta bloklandi")
+
+    # Refresh card
+    callback.data = f"admin_master_stats:{master_id}"
+    await admin_master_stats_view(callback, session)

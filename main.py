@@ -29,7 +29,7 @@ from bot.handlers.master.orders import router as master_router
 from bot.handlers.admin.stats import router as admin_router
 
 # Middlewares
-from bot.middlewares import DbSessionMiddleware, AuthMiddleware, ThrottlingMiddleware, FastResponseMiddleware
+from bot.middlewares import DbSessionMiddleware, AuthMiddleware, ThrottlingMiddleware
 
 # Background tasks
 from tasks.sla_monitor import check_sla_violations

@@ -61,7 +61,11 @@ class NotificationService:
                     latitude=order.latitude,
                     longitude=order.longitude,
                 )
-            logger.info(f"Dispatchers notified about order {order.order_uid}")
+                logger.info(f"Dispatchers notified about order {order.order_uid}")
+            else:
+                logger.warning(
+                    f"Dispatcher group is not configured; order {order.order_uid} was not broadcast."
+                )
         except Exception as e:
             logger.error(f"Failed to notify dispatchers: {e}")
 

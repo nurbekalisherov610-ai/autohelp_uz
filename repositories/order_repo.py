@@ -5,7 +5,7 @@ Database operations for orders, status history, payments, and reviews.
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, update, func, and_, or_
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -309,7 +309,9 @@ class OrderRepo:
         timestamp_col = {
             OrderStatus.ASSIGNED: Order.assigned_at,
             OrderStatus.ON_THE_WAY: Order.on_the_way_at,
-            OrderStatus.AWAITING_CONFIRM: Order.completed_at,
+            # No dedicated awaiting_confirm timestamp column yet;
+            # updated_at is the most reliable proxy for SLA tracking.
+            OrderStatus.AWAITING_CONFIRM: Order.updated_at,
         }.get(status, Order.updated_at)
 
         result = await self.session.scalars(

@@ -316,6 +316,28 @@ async def process_payment_amount(
     await state.set_state(MasterOrderStates.recording_video)
 
 
+@router.callback_query(
+    RoleFilter("master"),
+    F.data.startswith("master_amount:"),
+)
+async def request_amount_from_button(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    """
+    Legacy/compatibility handler:
+    Some keyboards still emit master_amount:<order_uid>.
+    """
+    order_uid = callback.data.split(":")[1]
+    await state.update_data(completing_order_uid=order_uid)
+    await state.set_state(MasterOrderStates.entering_amount)
+    await callback.message.edit_text(
+        t("master_enter_amount", "uz"),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 # ── Master video confirmation ─────────────────────────────────────
 
 @router.message(MasterOrderStates.recording_video, F.video_note)

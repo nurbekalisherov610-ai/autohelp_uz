@@ -24,8 +24,8 @@ import models  # noqa: F401
 # Alembic Config object
 config = context.config
 
-# Override sqlalchemy.url from settings (use ASYNC URL for asyncpg)
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Override sqlalchemy.url from settings (use normalized async URL)
+config.set_main_option("sqlalchemy.url", settings.get_database_url)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:

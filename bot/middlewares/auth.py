@@ -1,25 +1,26 @@
 """
-AutoHelp.uz - Authentication & Role Middleware (OPTIMIZED)
-Single DB query instead of 3 sequential ones.
-Callbacks get instant visual response via early answer().
+AutoHelp.uz - Authentication & Role Middleware (optimized)
+Resolves role for each event and injects:
+- user_role
+- user_data
+- user_lang
 """
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Message, CallbackQuery
-from sqlalchemy import select, union_all, literal
+from aiogram.types import CallbackQuery, Message, TelegramObject
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
-from models import User, Master, Staff
+from models import Master, Staff, User
 
 
 class AuthMiddleware(BaseMiddleware):
     """
     Optimized auth middleware.
     - Checks admin_ids from config first (zero DB cost)
-    - Then does a SINGLE query across staff+master+user tables
-    - Results cached in request data dict
+    - Then checks staff -> master -> user
     """
 
     async def __call__(
@@ -35,29 +36,21 @@ class AuthMiddleware(BaseMiddleware):
             telegram_id = event.from_user.id
 
         if telegram_id is None:
-            from loguru import logger
-            logger.warning(f"AuthMiddleware received event with no telegram_id: {type(event)}")
             return await handler(event, data)
 
-        from loguru import logger
-        logger.info(f"AuthMiddleware processing telegram_id={telegram_id} on {type(event)}")
-
-        # ── Fast path: check admin_ids from config (no DB) ────────
+        # Fast path: config-defined admins (works even before staff row exists)
         if telegram_id in settings.admin_ids:
-            logger.info("User is in settings.admin_ids list!")
             session: AsyncSession = data.get("session")
             if session:
                 staff = await session.scalar(
                     select(Staff).where(Staff.telegram_id == telegram_id)
                 )
                 if staff:
-                    logger.info(f"User is staff: {staff.role.value}")
                     data["user_role"] = staff.role.value
                     data["user_data"] = staff
                     data["user_lang"] = "uz"
                     return await handler(event, data)
 
-            logger.info("Assigned super_admin fallback role.")
             data["user_role"] = "super_admin"
             data["user_data"] = None
             data["user_lang"] = "uz"
@@ -65,14 +58,12 @@ class AuthMiddleware(BaseMiddleware):
 
         session: AsyncSession = data.get("session")
         if session is None:
-            logger.warning("Session is None in AuthMiddleware!")
             data["user_role"] = "new"
             data["user_data"] = None
             data["user_lang"] = "uz"
             return await handler(event, data)
 
-        # ── Single optimized DB lookup: staff → master → user ─────
-        # Check staff first (smallest table, most privileged)
+        # Staff first (most privileged / smallest table)
         staff = await session.scalar(
             select(Staff).where(
                 Staff.telegram_id == telegram_id,
@@ -85,7 +76,6 @@ class AuthMiddleware(BaseMiddleware):
             data["user_lang"] = "uz"
             return await handler(event, data)
 
-        # Check master
         master = await session.scalar(
             select(Master).where(
                 Master.telegram_id == telegram_id,
@@ -98,10 +88,7 @@ class AuthMiddleware(BaseMiddleware):
             data["user_lang"] = "uz"
             return await handler(event, data)
 
-        # Check client
-        user = await session.scalar(
-            select(User).where(User.telegram_id == telegram_id)
-        )
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         if user:
             data["user_role"] = "client"
             data["user_data"] = user
@@ -112,3 +99,4 @@ class AuthMiddleware(BaseMiddleware):
             data["user_lang"] = "uz"
 
         return await handler(event, data)
+
