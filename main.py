@@ -243,7 +243,8 @@ async def main():
     logger.info("✅ APScheduler started with background tasks")
 
     # Start polling
-    logger.info("🤖 Starting long polling...")
+    me = await bot.get_me()
+    logger.info(f"🤖 Starting long polling for @{me.username}...")
     try:
         await dp.start_polling(
             bot,
