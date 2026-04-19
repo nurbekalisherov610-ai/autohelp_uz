@@ -60,13 +60,15 @@ class Settings(BaseSettings):
     @property
     def get_database_url(self) -> str:
         """Async PostgreSQL connection URL."""
-        if self.database_url:
+        import os
+        raw_url = os.getenv("DATABASE_URL") or self.database_url
+        if raw_url:
             # Railway provides postgres://..., SQLAlchemy needs postgresql+asyncpg://...
-            if self.database_url.startswith("postgres://"):
-                return self.database_url.replace("postgres://", "postgresql+asyncpg://", 1)
-            if self.database_url.startswith("postgresql://"):
-                return self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-            return self.database_url
+            if raw_url.startswith("postgres://"):
+                return raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
+            if raw_url.startswith("postgresql://"):
+                return raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return raw_url
             
         ssl_param = "?ssl=require" if self.db_ssl else ""
         return (

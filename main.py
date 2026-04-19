@@ -184,7 +184,15 @@ async def main():
 
     logger.info("=" * 50)
     logger.info("AutoHelp.uz Bot v1.0.0")
-    logger.info(f"Database: {settings.db_host}")
+    
+    # Hide password in logs
+    safe_db_url = settings.get_database_url
+    if "@" in safe_db_url:
+        host_part = safe_db_url.split("@")[1].split("/")[0]
+        logger.info(f"Database Host: {host_part}")
+    else:
+        logger.info(f"Database string: {safe_db_url[:15]}...")
+        
     logger.info(f"Redis: {'configured' if settings.use_redis else 'memory mode'}")
     logger.info("=" * 50)
 
