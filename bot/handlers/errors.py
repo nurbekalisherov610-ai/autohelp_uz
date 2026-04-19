@@ -3,8 +3,10 @@ AutoHelp.uz - Global Error Handler
 Catches unhandled exceptions gracefully, prevents bot from crashing silently,
 and sends a detailed traceback directly to the admins.
 """
+import html
 import traceback
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import ErrorEvent
 from loguru import logger
 
@@ -31,13 +33,19 @@ async def global_error_handler(event: ErrorEvent, bot):
     
     logger.exception(f"Unhandled exception in bot: {exception}")
 
+    # Do not spam admins with huge tracebacks for parse-entity formatting mistakes.
+    if isinstance(exception, TelegramBadRequest) and "can't parse entities" in str(exception).lower():
+        return True
+
     # Build an admin alert
+    safe_err = html.escape(str(exception)[:400])
+    safe_tb = html.escape(short_tb)
     alert_text = (
         f"🚨 <b>CRITICAL SYSTEM ERROR</b> 🚨\n\n"
         f"<b>Type:</b> <code>{type(exception).__name__}</code>\n"
-        f"<b>Error:</b> <code>{str(exception)[:200]}</code>\n\n"
+        f"<b>Error:</b> <code>{safe_err}</code>\n\n"
         f"<b>Traceback:</b>\n"
-        f"<pre language='python'>{short_tb}</pre>"
+        f"<pre>{safe_tb}</pre>"
     )
 
     # 1. Alert the admins

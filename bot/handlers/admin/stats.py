@@ -77,7 +77,8 @@ async def admin_start_denied(message: Message):
     """Friendly access-denied message when user has no admin privileges."""
     await message.answer(
         "⛔ Sizda admin panel huquqi yo'q.\n"
-        "Admin kirishini yoqish uchun: python manage.py add_admin <telegram_id> <ism> <tel>",
+        "Admin kirishini yoqish uchun: python manage.py add_admin [telegram_id] [ism] [tel]",
+        parse_mode=None,
     )
 
 
