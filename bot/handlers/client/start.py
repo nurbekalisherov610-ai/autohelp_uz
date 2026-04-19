@@ -41,7 +41,11 @@ async def cmd_start(
         return
 
     # Dispatcher/master/admin — they have their own flows
-    if user_role in ("dispatcher", "admin", "super_admin", "master"):
+    if user_role in ("admin", "super_admin"):
+        from bot.handlers.admin.stats import admin_start
+        return await admin_start(message)
+        
+    if user_role in ("dispatcher", "master"):
         return
 
     # New user — start registration
