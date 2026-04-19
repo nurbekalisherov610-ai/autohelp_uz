@@ -213,9 +213,6 @@ async def main():
     dp.shutdown.register(on_shutdown)
 
     # Register middlewares (order matters!)
-    # 0. Fast response — instantly answers ALL callbacks (kills visual lag)
-    dp.callback_query.middleware(FastResponseMiddleware())
-
     # 1. Database session — provides session to all handlers
     dp.message.middleware(DbSessionMiddleware())
     dp.callback_query.middleware(DbSessionMiddleware())
