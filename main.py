@@ -80,9 +80,9 @@ async def acquire_polling_lock():
     acquired = await redis.set(key, token, nx=True, ex=POLL_LOCK_TTL_SECONDS)
     if not acquired:
         holder = await redis.get(key)
-        logger.error(
-            f"Another polling instance is already active (lock holder: {holder}). "
-            "This instance will exit to avoid TelegramConflictError."
+        logger.warning(
+            f"Redis polling lock is busy (lock holder: {holder}). "
+            "Continuing with PostgreSQL lock only."
         )
         return None
 
@@ -333,9 +333,7 @@ async def main():
     # Acquire distributed lock (prevents multi-instance polling conflicts)
     lock_state = await acquire_polling_lock()
     if settings.use_redis and not lock_state:
-        await release_db_polling_lock(db_lock_conn, db_lock_key)
-        await bot.session.close()
-        return
+        logger.warning("Redis lock not acquired; PostgreSQL lock remains the source of truth.")
 
     # Create FSM storage (Redis or Memory)
     storage = await create_storage()
