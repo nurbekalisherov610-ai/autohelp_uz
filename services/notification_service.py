@@ -4,10 +4,12 @@ Handles sending notifications to clients, dispatchers, and masters.
 """
 from aiogram import Bot
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.order import Order, PROBLEM_LABELS
 from models.master import Master
+from models.staff import Staff, StaffRole
 from models.user import User
 from locales.texts import t
 from bot.keyboards.dispatcher_kb import (
@@ -24,6 +26,24 @@ class NotificationService:
     def __init__(self, bot: Bot, session: AsyncSession):
         self.bot = bot
         self.session = session
+
+    async def _get_dispatcher_chat_ids(self) -> list[int]:
+        """
+        Resolve dispatcher notification destinations.
+        - If DISPATCHER_GROUP_ID is set, use only that.
+        - Else, fallback to active dispatcher private chats.
+        """
+        if settings.dispatcher_group_id:
+            return [settings.dispatcher_group_id]
+
+        result = await self.session.scalars(
+            select(Staff.telegram_id).where(
+                Staff.role == StaffRole.DISPATCHER,
+                Staff.is_active == True,
+            )
+        )
+        ids = [int(x) for x in result.all()]
+        return list(dict.fromkeys(ids))
 
     async def notify_dispatchers_new_order(
         self, order: Order, user: User
@@ -45,10 +65,17 @@ class NotificationService:
         )
 
         try:
-            # Send to dispatcher group
-            if settings.dispatcher_group_id:
+            chat_ids = await self._get_dispatcher_chat_ids()
+            if not chat_ids:
+                logger.warning(
+                    f"No dispatcher destination configured; order {order.order_uid} was not broadcast."
+                )
+                return
+
+            sent = 0
+            for chat_id in chat_ids:
                 await self.bot.send_message(
-                    chat_id=settings.dispatcher_group_id,
+                    chat_id=chat_id,
                     text=text,
                     parse_mode="HTML",
                     reply_markup=dispatcher_order_actions(order.order_uid),
@@ -57,15 +84,14 @@ class NotificationService:
 
                 # Also send location
                 await self.bot.send_location(
-                    chat_id=settings.dispatcher_group_id,
+                    chat_id=chat_id,
                     latitude=order.latitude,
                     longitude=order.longitude,
                 )
-                logger.info(f"Dispatchers notified about order {order.order_uid}")
-            else:
-                logger.warning(
-                    f"Dispatcher group is not configured; order {order.order_uid} was not broadcast."
-                )
+                sent += 1
+            logger.info(
+                f"Dispatch notification sent to {sent} destination(s) for order {order.order_uid}"
+            )
         except Exception as e:
             logger.error(f"Failed to notify dispatchers: {e}")
 
@@ -184,9 +210,10 @@ class NotificationService:
             f"Boshqa usta tayinlang 👇"
         )
         try:
-            if settings.dispatcher_group_id:
+            chat_ids = await self._get_dispatcher_chat_ids()
+            for chat_id in chat_ids:
                 await self.bot.send_message(
-                    chat_id=settings.dispatcher_group_id,
+                    chat_id=chat_id,
                     text=text,
                     parse_mode="HTML",
                     reply_markup=reassign_order_keyboard(order.order_uid),
@@ -205,9 +232,10 @@ class NotificationService:
             f"Tasdiqlang yoki summani o'zgartiring 👇"
         )
         try:
-            if settings.dispatcher_group_id:
+            chat_ids = await self._get_dispatcher_chat_ids()
+            for chat_id in chat_ids:
                 await self.bot.send_message(
-                    chat_id=settings.dispatcher_group_id,
+                    chat_id=chat_id,
                     text=text,
                     parse_mode="HTML",
                     reply_markup=dispatcher_confirm_completion(order.order_uid),
@@ -219,9 +247,10 @@ class NotificationService:
         """Send SLA violation alert to dispatchers."""
         text = t(alert_key, lang="uz", order_uid=order.order_uid)
         try:
-            if settings.dispatcher_group_id:
+            chat_ids = await self._get_dispatcher_chat_ids()
+            for chat_id in chat_ids:
                 await self.bot.send_message(
-                    chat_id=settings.dispatcher_group_id,
+                    chat_id=chat_id,
                     text=text,
                     parse_mode="HTML",
                 )

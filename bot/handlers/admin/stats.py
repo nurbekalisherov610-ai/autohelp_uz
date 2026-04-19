@@ -60,8 +60,8 @@ async def _edit_or_send(callback: CallbackQuery, text: str, **kwargs):
 
 # ── /admin command ────────────────────────────────────────────────
 
-@router.message(RoleFilter("admin", "super_admin"), F.text == "/admin")
-@router.message(RoleFilter("admin", "super_admin"), F.text.contains("Admin"))
+@router.message(RoleFilter("admin", "super_admin", "dispatcher"), F.text == "/admin")
+@router.message(RoleFilter("admin", "super_admin", "dispatcher"), F.text.contains("Admin"))
 async def admin_start(message: Message):
     """Admin main menu."""
     await message.answer(
@@ -72,7 +72,16 @@ async def admin_start(message: Message):
     )
 
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:menu")
+@router.message(F.text == "/admin")
+async def admin_start_denied(message: Message):
+    """Friendly access-denied message when user has no admin privileges."""
+    await message.answer(
+        "⛔ Sizda admin panel huquqi yo'q.\n"
+        "Admin kirishini yoqish uchun: python manage.py add_admin <telegram_id> <ism> <tel>",
+    )
+
+
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:menu")
 async def admin_menu_cb(callback: CallbackQuery):
     await _edit_or_send(callback, 
         "👑 <b>Admin Paneli — AutoHelp.uz</b>\n\n"
@@ -85,7 +94,7 @@ async def admin_menu_cb(callback: CallbackQuery):
 
 # ── Dashboard ─────────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:dashboard")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:dashboard")
 async def admin_dashboard(callback: CallbackQuery, session: AsyncSession):
     """Live dashboard — CEO view."""
     from loguru import logger
@@ -150,7 +159,7 @@ async def admin_dashboard(callback: CallbackQuery, session: AsyncSession):
 
 # ── Active Orders ─────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:active_orders")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:active_orders")
 async def admin_active_orders(callback: CallbackQuery, session: AsyncSession):
     """Show all currently active orders."""
     await callback.answer("📋 Yuklanmoqda...")
@@ -196,7 +205,7 @@ async def admin_active_orders(callback: CallbackQuery, session: AsyncSession):
 
 # ── Orders by filter ──────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:orders")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:orders")
 async def admin_orders_menu(callback: CallbackQuery):
     await _edit_or_send(callback, 
         "📋 <b>Buyurtmalar</b>\n\nFiltrni tanlang:",
@@ -207,7 +216,7 @@ async def admin_orders_menu(callback: CallbackQuery):
 
 
 @router.callback_query(
-    RoleFilter("admin", "super_admin"),
+    RoleFilter("admin", "super_admin", "dispatcher"),
     F.data.startswith("admin_filter:"),
 )
 async def admin_filter_orders(callback: CallbackQuery, session: AsyncSession):
@@ -272,7 +281,7 @@ async def admin_filter_orders(callback: CallbackQuery, session: AsyncSession):
 
 # ── Reviews ───────────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:reviews")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:reviews")
 async def admin_reviews(callback: CallbackQuery, session: AsyncSession):
     """Show latest client reviews."""
     await callback.answer("⭐ Yuklanmoqda...")
@@ -316,7 +325,7 @@ async def admin_reviews(callback: CallbackQuery, session: AsyncSession):
 
 # ── Masters ───────────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:masters")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:masters")
 async def admin_masters(callback: CallbackQuery, session: AsyncSession):
     """Show all masters with live status."""
     await callback.answer("👨‍🔧 Yuklanmoqda...")
@@ -352,7 +361,7 @@ async def admin_masters(callback: CallbackQuery, session: AsyncSession):
 
 # ── Reports ───────────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:reports")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:reports")
 async def admin_reports(callback: CallbackQuery):
     await _edit_or_send(callback, 
         "📊 <b>Hisobotlar</b>\n\nDavrni tanlang:",
@@ -363,7 +372,7 @@ async def admin_reports(callback: CallbackQuery):
 
 
 @router.callback_query(
-    RoleFilter("admin", "super_admin"),
+    RoleFilter("admin", "super_admin", "dispatcher"),
     F.data.startswith("report:"),
 )
 async def generate_report(callback: CallbackQuery, session: AsyncSession):
@@ -418,7 +427,7 @@ async def generate_report(callback: CallbackQuery, session: AsyncSession):
 
 # ── Excel Export ──────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:export")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:export")
 async def admin_export_menu(callback: CallbackQuery):
     await _edit_or_send(callback, 
         "📥 <b>Excel Eksport</b>\n\nNimani eksport qilmoqchisiz?",
@@ -429,7 +438,7 @@ async def admin_export_menu(callback: CallbackQuery):
 
 
 @router.callback_query(
-    RoleFilter("admin", "super_admin"),
+    RoleFilter("admin", "super_admin", "dispatcher"),
     F.data.startswith("export:"),
 )
 async def process_export(callback: CallbackQuery, session: AsyncSession, bot: Bot):
@@ -577,7 +586,7 @@ async def process_export(callback: CallbackQuery, session: AsyncSession, bot: Bo
 
 # ── Audit Log ─────────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:audit")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:audit")
 async def admin_audit(callback: CallbackQuery, session: AsyncSession):
     await callback.answer("📝 Yuklanmoqda...")
 
@@ -605,7 +614,7 @@ async def admin_audit(callback: CallbackQuery, session: AsyncSession):
 
 # ── Dispatchers List ──────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:dispatchers")
+@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:dispatchers")
 async def admin_dispatchers(callback: CallbackQuery, session: AsyncSession):
     await callback.answer()
 
@@ -633,7 +642,7 @@ async def admin_dispatchers(callback: CallbackQuery, session: AsyncSession):
     )
 
 @router.callback_query(
-    RoleFilter("admin", "super_admin"),
+    RoleFilter("admin", "super_admin", "dispatcher"),
     F.data.startswith("admin_master_stats:"),
 )
 async def admin_master_stats_view(callback: CallbackQuery, session: AsyncSession):
@@ -667,7 +676,7 @@ async def admin_master_stats_view(callback: CallbackQuery, session: AsyncSession
 
 
 @router.callback_query(
-    RoleFilter("admin", "super_admin"),
+    RoleFilter("admin", "super_admin", "dispatcher"),
     F.data.startswith("admin_master_activate:"),
 )
 async def admin_master_activate(callback: CallbackQuery, session: AsyncSession):
@@ -686,7 +695,7 @@ async def admin_master_activate(callback: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(
-    RoleFilter("admin", "super_admin"),
+    RoleFilter("admin", "super_admin", "dispatcher"),
     F.data.startswith("admin_master_deactivate:"),
 )
 async def admin_master_deactivate(callback: CallbackQuery, session: AsyncSession):
@@ -707,9 +716,17 @@ async def admin_master_deactivate(callback: CallbackQuery, session: AsyncSession
 
 
 @router.callback_query(
-    RoleFilter("admin", "super_admin"),
+    RoleFilter("admin", "super_admin", "dispatcher"),
     F.data.startswith("admin:"),
 )
 async def admin_callback_fallback(callback: CallbackQuery):
     """Fallback for stale or unknown admin callback payloads."""
     await callback.answer("Panel yangilandi. Iltimos /admin ni qayta oching.", show_alert=True)
+
+
+@router.callback_query(
+    F.data.startswith("admin"),
+)
+async def admin_callback_denied(callback: CallbackQuery):
+    """Access denied fallback for non-admin users tapping admin buttons."""
+    await callback.answer("⛔ Admin panel huquqi yo'q", show_alert=True)

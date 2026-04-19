@@ -4,6 +4,7 @@ Quick commands for managing the bot from the command line.
 Usage:
     python manage.py add_master <telegram_id> <name> <phone>
     python manage.py add_dispatcher <telegram_id> <name> <phone>
+    python manage.py add_admin <telegram_id> <name> <phone>
     python manage.py list_masters
     python manage.py list_staff
     python manage.py stats
@@ -74,6 +75,37 @@ async def add_dispatcher(telegram_id: int, name: str, phone: str):
         print(f"✅ Dispatcher added: {name} (ID: {telegram_id})")
 
 
+async def add_admin(telegram_id: int, name: str, phone: str):
+    """Add a new admin to the system."""
+    await init_db()
+    async with async_session() as session:
+        from sqlalchemy import select
+        existing = await session.scalar(
+            select(Staff).where(Staff.telegram_id == telegram_id)
+        )
+        if existing:
+            existing.role = StaffRole.ADMIN
+            existing.is_active = True
+            if name:
+                existing.full_name = name
+            if phone:
+                existing.phone = phone
+            await session.commit()
+            print(f"✅ Existing staff promoted to ADMIN: {existing.full_name} (ID: {telegram_id})")
+            return
+
+        staff = Staff(
+            telegram_id=telegram_id,
+            full_name=name,
+            phone=phone,
+            role=StaffRole.ADMIN,
+            is_active=True,
+        )
+        session.add(staff)
+        await session.commit()
+        print(f"✅ Admin added: {name} (ID: {telegram_id})")
+
+
 async def list_masters():
     """List all masters."""
     await init_db()
@@ -142,6 +174,8 @@ def main():
         asyncio.run(add_master(int(sys.argv[2]), sys.argv[3], sys.argv[4]))
     elif cmd == "add_dispatcher" and len(sys.argv) == 5:
         asyncio.run(add_dispatcher(int(sys.argv[2]), sys.argv[3], sys.argv[4]))
+    elif cmd == "add_admin" and len(sys.argv) == 5:
+        asyncio.run(add_admin(int(sys.argv[2]), sys.argv[3], sys.argv[4]))
     elif cmd == "list_masters":
         asyncio.run(list_masters())
     elif cmd == "list_staff":
