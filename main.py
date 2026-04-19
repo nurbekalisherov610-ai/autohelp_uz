@@ -16,6 +16,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
+from sqlalchemy import text
 
 from core.config import settings
 from core.database import init_db, close_db
@@ -111,6 +112,47 @@ async def release_polling_lock(lock_state):
             logger.info("✅ Polling lock released")
     except Exception as e:
         logger.warning(f"Failed to release polling lock: {e}")
+
+
+async def acquire_db_polling_lock(bot_token: str):
+    """
+    Acquire a PostgreSQL advisory lock so only one instance can poll.
+    This protects against multi-instance conflicts even across different Redis services.
+    """
+    from core.database import engine
+
+    try:
+        bot_id = int(bot_token.split(":", 1)[0])
+    except Exception:
+        bot_id = abs(hash(bot_token)) % 2_000_000_000
+
+    conn = await engine.connect()
+    acquired = await conn.scalar(
+        text("SELECT pg_try_advisory_lock(:key)"),
+        {"key": bot_id},
+    )
+    if not acquired:
+        await conn.close()
+        logger.error(
+            "Another bot instance already holds PostgreSQL polling lock. "
+            "This instance will exit to avoid TelegramConflictError."
+        )
+        return None, bot_id
+
+    logger.info("✅ PostgreSQL polling lock acquired")
+    return conn, bot_id
+
+
+async def release_db_polling_lock(conn, key: int):
+    """Release PostgreSQL advisory lock and close lock connection."""
+    if not conn:
+        return
+
+    with suppress(Exception):
+        await conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+    with suppress(Exception):
+        await conn.close()
+    logger.info("✅ PostgreSQL polling lock released")
 
 
 async def create_storage():
@@ -278,9 +320,20 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    # Ensure polling mode and clear stale webhook state if any.
+    with suppress(Exception):
+        await bot.delete_webhook(drop_pending_updates=False)
+
+    # Cross-service lock: one poller across all deployments sharing this DB.
+    db_lock_conn, db_lock_key = await acquire_db_polling_lock(settings.bot_token)
+    if not db_lock_conn:
+        await bot.session.close()
+        return
+
     # Acquire distributed lock (prevents multi-instance polling conflicts)
     lock_state = await acquire_polling_lock()
     if settings.use_redis and not lock_state:
+        await release_db_polling_lock(db_lock_conn, db_lock_key)
         await bot.session.close()
         return
 
@@ -336,6 +389,7 @@ async def main():
     finally:
         scheduler.shutdown(wait=False)
         await release_polling_lock(lock_state)
+        await release_db_polling_lock(db_lock_conn, db_lock_key)
         await bot.session.close()
 
 
