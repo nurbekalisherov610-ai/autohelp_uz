@@ -38,21 +38,16 @@ class AuthMiddleware(BaseMiddleware):
         if telegram_id is None:
             return await handler(event, data)
 
-        # Fast path: config-defined admins (works even before staff row exists)
+        # Fast path: env-configured admins should always keep admin privileges.
         if telegram_id in settings.admin_ids:
             session: AsyncSession = data.get("session")
+            staff = None
             if session:
                 staff = await session.scalar(
                     select(Staff).where(Staff.telegram_id == telegram_id)
                 )
-                if staff:
-                    data["user_role"] = staff.role.value
-                    data["user_data"] = staff
-                    data["user_lang"] = "uz"
-                    return await handler(event, data)
-
             data["user_role"] = "super_admin"
-            data["user_data"] = None
+            data["user_data"] = staff
             data["user_lang"] = "uz"
             return await handler(event, data)
 
@@ -99,4 +94,3 @@ class AuthMiddleware(BaseMiddleware):
             data["user_lang"] = "uz"
 
         return await handler(event, data)
-

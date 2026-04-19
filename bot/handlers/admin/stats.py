@@ -7,6 +7,7 @@ import io
 from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +45,19 @@ def _safe_pct(part, total) -> str:
     return f"{part / total * 100:.1f}"
 
 
+async def _edit_or_send(callback: CallbackQuery, text: str, **kwargs):
+    """Edit callback message, fallback to sending a new one if edit is impossible."""
+    try:
+        return await callback.message.edit_text(text, **kwargs)
+    except TelegramBadRequest as e:
+        err = str(e).lower()
+        if "message is not modified" in err:
+            return None
+        if "message can't be edited" in err or "message to edit not found" in err:
+            return await callback.message.answer(text, **kwargs)
+        raise
+
+
 # ── /admin command ────────────────────────────────────────────────
 
 @router.message(RoleFilter("admin", "super_admin"), F.text == "/admin")
@@ -60,7 +74,7 @@ async def admin_start(message: Message):
 
 @router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:menu")
 async def admin_menu_cb(callback: CallbackQuery):
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "👑 <b>Admin Paneli — AutoHelp.uz</b>\n\n"
         "Samarqand viloyati bo'yicha barcha jarayonlarni kuzating 👇",
         parse_mode="HTML",
@@ -129,7 +143,7 @@ async def admin_dashboard(callback: CallbackQuery, session: AsyncSession):
         f"👥 <b>Jami mijozlar:</b> {stats['total_users']}\n"
     )
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         text, parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -151,7 +165,7 @@ async def admin_active_orders(callback: CallbackQuery, session: AsyncSession):
     orders = list(result.all())
 
     if not orders:
-        await callback.message.edit_text(
+        await _edit_or_send(callback, 
             "✅ Hozirda faol buyurtmalar yo'q.",
             reply_markup=admin_back_button(),
         )
@@ -175,7 +189,7 @@ async def admin_active_orders(callback: CallbackQuery, session: AsyncSession):
     if len(text) > 4000:
         text = text[:3900] + "\n...(hammasi Excel'da)"
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         text, parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -184,7 +198,7 @@ async def admin_active_orders(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:orders")
 async def admin_orders_menu(callback: CallbackQuery):
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "📋 <b>Buyurtmalar</b>\n\nFiltrni tanlang:",
         parse_mode="HTML",
         reply_markup=admin_orders_filter(),
@@ -226,7 +240,7 @@ async def admin_filter_orders(callback: CallbackQuery, session: AsyncSession):
     orders = list(result.all())
 
     if not orders:
-        await callback.message.edit_text(
+        await _edit_or_send(callback, 
             f"📭 {filter_labels.get(filter_type, filter_type)} buyurtmalar yo'q.",
             reply_markup=admin_back_button(),
         )
@@ -251,7 +265,7 @@ async def admin_filter_orders(callback: CallbackQuery, session: AsyncSession):
     if len(text) > 4000:
         text = text[:3900] + "\n...(davomi Excel'da)"
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         text, parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -275,7 +289,7 @@ async def admin_reviews(callback: CallbackQuery, session: AsyncSession):
     reviews = list(result.all())
 
     if not reviews:
-        await callback.message.edit_text(
+        await _edit_or_send(callback, 
             "⭐ Hali sharhlar yo'q.",
             reply_markup=admin_back_button(),
         )
@@ -295,7 +309,7 @@ async def admin_reviews(callback: CallbackQuery, session: AsyncSession):
             f"{comment}\n"
         )
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "\n".join(lines), parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -313,7 +327,7 @@ async def admin_masters(callback: CallbackQuery, session: AsyncSession):
     masters = list(result.all())
 
     if not masters:
-        await callback.message.edit_text(
+        await _edit_or_send(callback, 
             "👨‍🔧 Ustalar topilmadi.\n\n"
             "<code>python manage.py add_master &lt;id&gt; &lt;ism&gt; &lt;tel&gt;</code>",
             parse_mode="HTML",
@@ -331,7 +345,7 @@ async def admin_masters(callback: CallbackQuery, session: AsyncSession):
             f"   ✅{m.completed_orders} bajargan | ❌{m.rejected_orders} rad\n"
         )
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "\n".join(lines), parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -340,7 +354,7 @@ async def admin_masters(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:reports")
 async def admin_reports(callback: CallbackQuery):
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "📊 <b>Hisobotlar</b>\n\nDavrni tanlang:",
         parse_mode="HTML",
         reply_markup=admin_reports_period(),
@@ -397,7 +411,7 @@ async def generate_report(callback: CallbackQuery, session: AsyncSession):
         f"🏆 <b>Top ustalar:</b>\n{lb_text}"
     )
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         text, parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -406,7 +420,7 @@ async def generate_report(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:export")
 async def admin_export_menu(callback: CallbackQuery):
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "📥 <b>Excel Eksport</b>\n\nNimani eksport qilmoqchisiz?",
         parse_mode="HTML",
         reply_markup=admin_export_options(),
@@ -422,7 +436,7 @@ async def process_export(callback: CallbackQuery, session: AsyncSession, bot: Bo
     """Generate and send Excel file."""
     export_type = callback.data.split(":")[1]
     await callback.answer("📊 Fayl tayyorlanmoqda...")
-    await callback.message.edit_text("⏳ Excel fayl tayyorlanmoqda...")
+    await _edit_or_send(callback, "⏳ Excel fayl tayyorlanmoqda...")
 
     wb = Workbook()
     ws = wb.active
@@ -555,7 +569,7 @@ async def process_export(callback: CallbackQuery, session: AsyncSession, bot: Bo
         ),
         parse_mode="HTML",
     )
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         f"✅ {export_type.capitalize()} fayli yuborildi!",
         reply_markup=admin_back_button(),
     )
@@ -574,7 +588,7 @@ async def admin_audit(callback: CallbackQuery, session: AsyncSession):
     logs = list(result.all())
 
     if not logs:
-        await callback.message.edit_text(
+        await _edit_or_send(callback, 
             "📝 Audit log bo'sh.", reply_markup=admin_back_button()
         )
         return
@@ -584,7 +598,7 @@ async def admin_audit(callback: CallbackQuery, session: AsyncSession):
         time_str = log.created_at.strftime("%H:%M %d.%m") if log.created_at else ""
         lines.append(f"• <code>{log.action}</code> | {log.entity_type} | {time_str}")
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "\n".join(lines), parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -602,7 +616,7 @@ async def admin_dispatchers(callback: CallbackQuery, session: AsyncSession):
     staff_list = list(result.all())
 
     if not staff_list:
-        await callback.message.edit_text(
+        await _edit_or_send(callback, 
             "👥 Dispetcherlar topilmadi.\n\n"
             "<code>python manage.py add_dispatcher &lt;id&gt; &lt;ism&gt; &lt;tel&gt;</code>",
             parse_mode="HTML",
@@ -614,7 +628,7 @@ async def admin_dispatchers(callback: CallbackQuery, session: AsyncSession):
     for s in staff_list:
         lines.append(f"• <b>{s.full_name}</b> | 📞 {s.phone or '—'} | ID: <code>{s.telegram_id}</code>")
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         "\n".join(lines), parse_mode="HTML", reply_markup=admin_back_button()
     )
 
@@ -644,7 +658,7 @@ async def admin_master_stats_view(callback: CallbackQuery, session: AsyncSession
         f"🟢 Aktiv: <b>{'Ha' if master.is_active else 'Yo‘q'}</b>"
     )
 
-    await callback.message.edit_text(
+    await _edit_or_send(callback, 
         text,
         parse_mode="HTML",
         reply_markup=admin_master_actions(master.id),
@@ -690,3 +704,12 @@ async def admin_master_deactivate(callback: CallbackQuery, session: AsyncSession
     # Refresh card
     callback.data = f"admin_master_stats:{master_id}"
     await admin_master_stats_view(callback, session)
+
+
+@router.callback_query(
+    RoleFilter("admin", "super_admin"),
+    F.data.startswith("admin:"),
+)
+async def admin_callback_fallback(callback: CallbackQuery):
+    """Fallback for stale or unknown admin callback payloads."""
+    await callback.answer("Panel yangilandi. Iltimos /admin ni qayta oching.", show_alert=True)
