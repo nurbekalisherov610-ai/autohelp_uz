@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     sla_assign_timeout: int = 5
     sla_on_the_way_timeout: int = 60
     sla_confirm_timeout: int = 15
+    order_draft_reminder_minutes: int = 10
 
     # ── Logging ───────────────────────────────────────────────────
     log_level: str = "INFO"

@@ -30,20 +30,35 @@ class NotificationService:
     async def _get_dispatcher_chat_ids(self) -> list[int]:
         """
         Resolve dispatcher notification destinations.
-        - If DISPATCHER_GROUP_ID is set, use only that.
-        - Else, fallback to active dispatcher private chats.
+        - Multi-dispatcher mode: use group chat (if configured).
+        - Single-dispatcher mode: send direct to dispatcher + admin mirror.
+        - If no group configured: direct dispatcher chats.
         """
-        if settings.dispatcher_group_id:
-            return [settings.dispatcher_group_id]
-
         result = await self.session.scalars(
             select(Staff.telegram_id).where(
                 Staff.role == StaffRole.DISPATCHER,
                 Staff.is_active == True,
             )
         )
-        ids = [int(x) for x in result.all()]
-        return list(dict.fromkeys(ids))
+        dispatcher_ids = [int(x) for x in result.all()]
+        dispatcher_ids = list(dict.fromkeys(dispatcher_ids))
+
+        # If no group configured, direct mode only.
+        if not settings.dispatcher_group_id:
+            return dispatcher_ids
+
+        # One dispatcher: direct handling is faster/reliable, plus admin mirror.
+        if len(dispatcher_ids) <= 1:
+            admin_mirror_ids = [
+                int(admin_id)
+                for admin_id in settings.admin_ids
+                if int(admin_id) not in dispatcher_ids
+            ]
+            merged = dispatcher_ids + admin_mirror_ids + [settings.dispatcher_group_id]
+            return list(dict.fromkeys(merged))
+
+        # Multiple dispatchers: group mode to avoid duplicate button actions.
+        return [settings.dispatcher_group_id]
 
     async def notify_dispatchers_new_order(
         self, order: Order, user: User

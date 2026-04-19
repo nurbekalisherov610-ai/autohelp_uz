@@ -20,6 +20,7 @@ from services.order_service import OrderService
 from services.notification_service import NotificationService
 from repositories.user_repo import UserRepo
 from repositories.order_repo import OrderRepo
+from repositories.order_draft_repo import OrderDraftRepo
 
 router = Router(name="client_order")
 
@@ -34,6 +35,29 @@ def _step_header(step: int, total: int = 4, lang: str = "uz") -> str:
     steps = steps_uz if lang == "uz" else steps_ru
     progress = "●" * step + "○" * (total - step)
     return f"<code>{progress}</code>  {steps[step-1]}  [{step}/{total}]\n{'─'*28}\n"
+
+
+async def _touch_order_draft(
+    session: AsyncSession,
+    telegram_id: int,
+    user_data: User | None,
+    user_lang: str,
+    state_name: str | None,
+):
+    """Mark unfinished order-flow activity for reminder logic."""
+    draft_repo = OrderDraftRepo(session)
+    await draft_repo.touch(
+        telegram_id=telegram_id,
+        user_id=user_data.id if user_data else None,
+        language=user_lang,
+        fsm_state=state_name,
+    )
+
+
+async def _clear_order_draft(session: AsyncSession, telegram_id: int):
+    """Clear unfinished order-flow reminder tracking."""
+    draft_repo = OrderDraftRepo(session)
+    await draft_repo.clear(telegram_id)
 
 
 # ── Trigger ───────────────────────────────────────────────────────
@@ -56,6 +80,7 @@ async def start_order(
     active_list = await order_repo.get_active_by_user(user_data.id)
     active = active_list[0] if active_list else None
     if active:
+        await _clear_order_draft(session, message.from_user.id)
         already_uz = (
             f"⚠️ Sizda allaqachon faol buyurtma mavjud!\n\n"
             f"📋 Buyurtma: <code>{active.order_uid}</code>\n"
@@ -87,6 +112,13 @@ async def start_order(
         reply_markup=problem_type_keyboard(user_lang),
     )
     await state.set_state(OrderCreationStates.selecting_problem)
+    await _touch_order_draft(
+        session=session,
+        telegram_id=message.from_user.id,
+        user_data=user_data,
+        user_lang=user_lang,
+        state_name=OrderCreationStates.selecting_problem.state,
+    )
 
 
 # ── Step 1: Problem type ──────────────────────────────────────────
@@ -98,6 +130,8 @@ async def start_order(
 async def process_problem_type(
     callback: CallbackQuery,
     state: FSMContext,
+    session: AsyncSession,
+    user_data: User | None = None,
     user_lang: str = "uz",
 ):
     """Handle problem type selection."""
@@ -128,6 +162,13 @@ async def process_problem_type(
             )
         await callback.message.edit_text(text, parse_mode="HTML")
         await state.set_state(OrderCreationStates.entering_description)
+        await _touch_order_draft(
+            session=session,
+            telegram_id=callback.from_user.id,
+            user_data=user_data,
+            user_lang=user_lang,
+            state_name=OrderCreationStates.entering_description.state,
+        )
         await callback.answer()
     else:
         # Known problem → description is optional
@@ -148,6 +189,13 @@ async def process_problem_type(
         await callback.message.edit_text(text, parse_mode="HTML")
         # For known problems go straight to location step
         await state.set_state(OrderCreationStates.sharing_location)
+        await _touch_order_draft(
+            session=session,
+            telegram_id=callback.from_user.id,
+            user_data=user_data,
+            user_lang=user_lang,
+            state_name=OrderCreationStates.sharing_location.state,
+        )
         await callback.message.answer(
             "📍" if user_lang == "uz" else "📍",
             reply_markup=share_location_keyboard(user_lang),
@@ -161,6 +209,8 @@ async def process_problem_type(
 async def process_description(
     message: Message,
     state: FSMContext,
+    session: AsyncSession,
+    user_data: User | None = None,
     user_lang: str = "uz",
 ):
     """Handle typed description."""
@@ -196,6 +246,13 @@ async def process_description(
         reply_markup=share_location_keyboard(user_lang),
     )
     await state.set_state(OrderCreationStates.sharing_location)
+    await _touch_order_draft(
+        session=session,
+        telegram_id=message.from_user.id,
+        user_data=user_data,
+        user_lang=user_lang,
+        state_name=OrderCreationStates.sharing_location.state,
+    )
 
 
 # ── Step 3: Location ──────────────────────────────────────────────
@@ -204,6 +261,8 @@ async def process_description(
 async def process_location(
     message: Message,
     state: FSMContext,
+    session: AsyncSession,
+    user_data: User | None = None,
     user_lang: str = "uz",
 ):
     """Handle location sharing."""
@@ -248,10 +307,22 @@ async def process_location(
         reply_markup=confirm_order_keyboard(user_lang),
     )
     await state.set_state(OrderCreationStates.confirming_order)
+    await _touch_order_draft(
+        session=session,
+        telegram_id=message.from_user.id,
+        user_data=user_data,
+        user_lang=user_lang,
+        state_name=OrderCreationStates.confirming_order.state,
+    )
 
 
 @router.message(OrderCreationStates.sharing_location)
-async def location_wrong_input(message: Message, user_lang: str = "uz"):
+async def location_wrong_input(
+    message: Message,
+    session: AsyncSession,
+    user_data: User | None = None,
+    user_lang: str = "uz",
+):
     """User sent text instead of location."""
     hint = (
         "📍 Joylashuvni yuborish uchun <b>pastdagi tugmani bosing</b>.\n\n"
@@ -261,6 +332,13 @@ async def location_wrong_input(message: Message, user_lang: str = "uz"):
         "Не пишите текст — используйте кнопку! 👇"
     )
     await message.answer(hint, parse_mode="HTML", reply_markup=share_location_keyboard(user_lang))
+    await _touch_order_draft(
+        session=session,
+        telegram_id=message.from_user.id,
+        user_data=user_data,
+        user_lang=user_lang,
+        state_name=OrderCreationStates.sharing_location.state,
+    )
 
 
 # ── Step 4: Confirm ───────────────────────────────────────────────
@@ -305,9 +383,11 @@ async def confirm_order(
         )
         await callback.answer()
         await state.clear()
+        await _clear_order_draft(session, callback.from_user.id)
         return
 
     await state.clear()
+    await _clear_order_draft(session, callback.from_user.id)
 
     success = (
         f"✅ <b>Buyurtmangiz qabul qilindi!</b>\n\n"
@@ -343,10 +423,12 @@ async def confirm_order(
 async def cancel_order_creation(
     callback: CallbackQuery,
     state: FSMContext,
+    session: AsyncSession,
     user_lang: str = "uz",
 ):
     """Cancel order creation."""
     await state.clear()
+    await _clear_order_draft(session, callback.from_user.id)
     cancelled = (
         "❌ Buyurtma bekor qilindi.\n\nQaytadan boshlash uchun tugmani bosing 👇"
         if user_lang == "uz" else
@@ -390,6 +472,7 @@ async def cancel_active_order(
             f"❌ Заявка <code>{order_uid}</code> отменена."
         )
         await callback.message.edit_text(cancelled, parse_mode="HTML")
+        await _clear_order_draft(session, callback.from_user.id)
     except ValueError as e:
         await callback.answer(str(e), show_alert=True)
         return
@@ -458,3 +541,62 @@ async def my_orders(
         )
 
     await message.answer("".join(lines), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "draft_continue")
+async def continue_order_draft(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user_data: User | None = None,
+    user_lang: str = "uz",
+):
+    """Continue previously abandoned order flow."""
+    current_state = await state.get_state()
+
+    if not current_state or not current_state.startswith("OrderCreationStates:"):
+        await _clear_order_draft(session, callback.from_user.id)
+        text = (
+            "ℹ️ Oldingi jarayon topilmadi. Yangidan boshlash uchun <b>«🆘 Yordam so'rash»</b> ni bosing."
+            if user_lang == "uz"
+            else "ℹ️ Предыдущий процесс не найден. Для нового запроса нажмите <b>«🆘 Запросить помощь»</b>."
+        )
+        await callback.message.answer(text, parse_mode="HTML")
+        await callback.answer()
+        return
+
+    await _touch_order_draft(
+        session=session,
+        telegram_id=callback.from_user.id,
+        user_data=user_data,
+        user_lang=user_lang,
+        state_name=current_state,
+    )
+
+    text = (
+        "✅ Zo'r, davom etamiz. Siz qolgan bosqichda turibsiz, keyingi amalni yuboring."
+        if user_lang == "uz"
+        else "✅ Отлично, продолжаем. Вы на том же шаге, отправьте следующее действие."
+    )
+    await callback.message.answer(text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "draft_cancel")
+async def cancel_order_draft(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user_lang: str = "uz",
+):
+    """Cancel abandoned order flow from reminder prompt."""
+    await state.clear()
+    await _clear_order_draft(session, callback.from_user.id)
+
+    text = (
+        "❌ Mayli, bekor qilindi. Kerak bo'lsa istalgan payt qayta yuborishingiz mumkin."
+        if user_lang == "uz"
+        else "❌ Хорошо, отменено. При необходимости можете отправить новую заявку в любое время."
+    )
+    await callback.message.answer(text)
+    await callback.answer()

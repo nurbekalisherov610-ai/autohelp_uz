@@ -38,6 +38,7 @@ from bot.middlewares import DbSessionMiddleware, AuthMiddleware, ThrottlingMiddl
 from tasks.sla_monitor import check_sla_violations
 from tasks.backup import run_daily_backup
 from tasks.reports import send_daily_report, send_weekly_report
+from tasks.order_draft_reminder import send_order_draft_reminders
 
 
 POLL_LOCK_TTL_SECONDS = 120
@@ -248,6 +249,18 @@ def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
         id="sla_monitor",
         name="SLA Monitor",
+        replace_existing=True,
+        misfire_grace_time=30,
+    )
+
+    # Abandoned order draft reminders — every 60 seconds
+    scheduler.add_job(
+        send_order_draft_reminders,
+        "interval",
+        seconds=60,
+        args=[bot],
+        id="order_draft_reminder",
+        name="Order Draft Reminder",
         replace_existing=True,
         misfire_grace_time=30,
     )

@@ -14,6 +14,7 @@ from bot.keyboards.client_kb import (
 )
 from locales.texts import t
 from repositories.user_repo import UserRepo
+from repositories.order_draft_repo import OrderDraftRepo
 from models.user import Language, User
 
 router = Router(name="client_start")
@@ -30,6 +31,8 @@ async def cmd_start(
 ):
     """Handle /start command."""
     await state.clear()
+    draft_repo = OrderDraftRepo(session)
+    await draft_repo.clear(message.from_user.id)
 
     # Existing user — go straight to main menu
     if user_role == "client" and user_data:
