@@ -74,7 +74,12 @@ async def admin_menu_cb(callback: CallbackQuery):
 @router.callback_query(RoleFilter("admin", "super_admin"), F.data == "admin:dashboard")
 async def admin_dashboard(callback: CallbackQuery, session: AsyncSession):
     """Live dashboard — CEO view."""
-    await callback.answer("📊 Yuklanmoqda...")
+    from loguru import logger
+    logger.info("ADMIN DASHBOARD HANDLER TRIGGERED!")
+    try:
+        await callback.answer("📊 Yuklanmoqda...")
+    except Exception as e:
+        logger.error(f"Failed to answer callback: {e}")
 
     stats_repo = StatsRepo(session)
     order_repo = OrderRepo(session)
