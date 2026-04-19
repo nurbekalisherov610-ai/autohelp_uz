@@ -3,6 +3,7 @@ AutoHelp.uz - Core Configuration Module
 Loads all settings from environment variables with validation.
 """
 import json
+import re
 from pathlib import Path
 from typing import Annotated, List
 
@@ -73,7 +74,13 @@ class Settings(BaseSettings):
             return []
 
         if isinstance(value, list):
-            return value
+            out = []
+            for item in value:
+                try:
+                    out.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+            return out
 
         if isinstance(value, int):
             return [value]
@@ -88,13 +95,29 @@ class Settings(BaseSettings):
                 try:
                     parsed = json.loads(raw)
                     if isinstance(parsed, list):
-                        return parsed
+                        out = []
+                        for item in parsed:
+                            try:
+                                out.append(int(item))
+                            except (TypeError, ValueError):
+                                continue
+                        return out
                 except json.JSONDecodeError:
                     pass
 
             # CSV / single value style
             parts = [p.strip() for p in raw.split(",") if p.strip()]
-            return [int(p) for p in parts]
+            out = []
+            for p in parts:
+                try:
+                    out.append(int(p))
+                except (TypeError, ValueError):
+                    pass
+            if out:
+                return out
+
+            # Last-resort fallback for noisy inputs like "id=123456"
+            return [int(x) for x in re.findall(r"-?\d+", raw)]
 
         return value
 

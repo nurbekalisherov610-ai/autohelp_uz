@@ -29,6 +29,7 @@ from models.review import Review
 from repositories.order_repo import OrderRepo
 from repositories.master_repo import MasterRepo
 from repositories.stats_repo import StatsRepo
+from core.config import settings
 
 router = Router(name="admin")
 
@@ -75,6 +76,12 @@ async def admin_start(message: Message):
 @router.message(F.text == "/admin")
 async def admin_start_denied(message: Message):
     """Friendly access-denied message when user has no admin privileges."""
+    # Safety net: if middleware role detection failed but env contains this ID,
+    # still allow admin panel access.
+    if message.from_user and message.from_user.id in settings.admin_ids:
+        await admin_start(message)
+        return
+
     await message.answer(
         "⛔ Sizda admin panel huquqi yo'q.\n"
         "Admin kirishini yoqish uchun: python manage.py add_admin [telegram_id] [ism] [tel]",

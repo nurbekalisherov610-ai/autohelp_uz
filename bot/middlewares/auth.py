@@ -5,6 +5,9 @@ Resolves role for each event and injects:
 - user_data
 - user_lang
 """
+import json
+import os
+import re
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
@@ -23,6 +26,52 @@ class AuthMiddleware(BaseMiddleware):
     - Then checks staff -> master -> user
     """
 
+    @staticmethod
+    def _load_env_admin_ids() -> set[int]:
+        """
+        Parse ADMIN_IDS from environment very defensively.
+        Supports:
+        - JSON list: [123, "456"]
+        - CSV: 123,456
+        - Any noisy string containing digits
+        """
+        ids = set()
+
+        # Include already parsed config values
+        for item in settings.admin_ids:
+            try:
+                ids.add(int(item))
+            except (TypeError, ValueError):
+                pass
+
+        raw = os.getenv("ADMIN_IDS", "")
+        if not raw:
+            return ids
+
+        # Try JSON first
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                for item in parsed:
+                    try:
+                        ids.add(int(item))
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                ids.add(int(parsed))
+            return ids
+        except Exception:
+            pass
+
+        # Fallback: CSV / noisy string
+        for token in re.findall(r"-?\d+", raw):
+            try:
+                ids.add(int(token))
+            except ValueError:
+                pass
+
+        return ids
+
     async def __call__(
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
@@ -39,7 +88,8 @@ class AuthMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # Fast path: env-configured admins should always keep admin privileges.
-        if telegram_id in settings.admin_ids:
+        admin_ids = self._load_env_admin_ids()
+        if telegram_id in admin_ids:
             session: AsyncSession = data.get("session")
             staff = None
             if session:
