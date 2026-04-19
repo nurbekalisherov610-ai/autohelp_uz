@@ -35,21 +35,29 @@ class AuthMiddleware(BaseMiddleware):
             telegram_id = event.from_user.id
 
         if telegram_id is None:
+            from loguru import logger
+            logger.warning(f"AuthMiddleware received event with no telegram_id: {type(event)}")
             return await handler(event, data)
+
+        from loguru import logger
+        logger.info(f"AuthMiddleware processing telegram_id={telegram_id} on {type(event)}")
 
         # ── Fast path: check admin_ids from config (no DB) ────────
         if telegram_id in settings.admin_ids:
+            logger.info("User is in settings.admin_ids list!")
             session: AsyncSession = data.get("session")
             if session:
                 staff = await session.scalar(
                     select(Staff).where(Staff.telegram_id == telegram_id)
                 )
                 if staff:
+                    logger.info(f"User is staff: {staff.role.value}")
                     data["user_role"] = staff.role.value
                     data["user_data"] = staff
                     data["user_lang"] = "uz"
                     return await handler(event, data)
 
+            logger.info("Assigned super_admin fallback role.")
             data["user_role"] = "super_admin"
             data["user_data"] = None
             data["user_lang"] = "uz"
@@ -57,6 +65,7 @@ class AuthMiddleware(BaseMiddleware):
 
         session: AsyncSession = data.get("session")
         if session is None:
+            logger.warning("Session is None in AuthMiddleware!")
             data["user_role"] = "new"
             data["user_data"] = None
             data["user_lang"] = "uz"
