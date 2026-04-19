@@ -324,16 +324,10 @@ async def main():
     with suppress(Exception):
         await bot.delete_webhook(drop_pending_updates=False)
 
-    # Cross-service lock: one poller across all deployments sharing this DB.
-    db_lock_conn, db_lock_key = await acquire_db_polling_lock(settings.bot_token)
-    if not db_lock_conn:
-        await bot.session.close()
-        return
-
-    # Acquire distributed lock (prevents multi-instance polling conflicts)
-    lock_state = await acquire_polling_lock()
-    if settings.use_redis and not lock_state:
-        logger.warning("Redis lock not acquired; PostgreSQL lock remains the source of truth.")
+    # Locking is disabled in runtime path to avoid hard-stop outages.
+    # Operationally, keep only one running bot instance in Railway.
+    db_lock_conn, db_lock_key = None, None
+    lock_state = None
 
     # Create FSM storage (Redis or Memory)
     storage = await create_storage()
