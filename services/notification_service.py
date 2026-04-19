@@ -66,14 +66,19 @@ class NotificationService:
 
         try:
             chat_ids = await self._get_dispatcher_chat_ids()
-            if not chat_ids:
-                logger.warning(
-                    f"No dispatcher destination configured; order {order.order_uid} was not broadcast."
-                )
-                return
+        except Exception as e:
+            logger.error(f"Failed to resolve dispatcher destinations: {e}")
+            return
 
-            sent = 0
-            for chat_id in chat_ids:
+        if not chat_ids:
+            logger.warning(
+                f"No dispatcher destination configured; order {order.order_uid} was not broadcast."
+            )
+            return
+
+        sent = 0
+        for chat_id in chat_ids:
+            try:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
@@ -89,11 +94,14 @@ class NotificationService:
                     longitude=order.longitude,
                 )
                 sent += 1
-            logger.info(
-                f"Dispatch notification sent to {sent} destination(s) for order {order.order_uid}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to notify dispatchers: {e}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to notify dispatcher destination {chat_id} for order {order.order_uid}: {e}"
+                )
+
+        logger.info(
+            f"Dispatch notification sent to {sent} destination(s) for order {order.order_uid}"
+        )
 
     async def notify_master_new_assignment(
         self, order: Order, master: Master, user: User
@@ -211,15 +219,22 @@ class NotificationService:
         )
         try:
             chat_ids = await self._get_dispatcher_chat_ids()
-            for chat_id in chat_ids:
+        except Exception as e:
+            logger.error(f"Failed to resolve dispatcher destinations: {e}")
+            return
+
+        for chat_id in chat_ids:
+            try:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
                     parse_mode="HTML",
                     reply_markup=reassign_order_keyboard(order.order_uid),
                 )
-        except Exception as e:
-            logger.error(f"Failed to notify dispatcher about rejection: {e}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to notify dispatcher destination {chat_id} about rejection: {e}"
+                )
 
     async def notify_dispatcher_awaiting_confirm(
         self, order: Order, amount: float
@@ -233,26 +248,40 @@ class NotificationService:
         )
         try:
             chat_ids = await self._get_dispatcher_chat_ids()
-            for chat_id in chat_ids:
+        except Exception as e:
+            logger.error(f"Failed to resolve dispatcher destinations: {e}")
+            return
+
+        for chat_id in chat_ids:
+            try:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
                     parse_mode="HTML",
                     reply_markup=dispatcher_confirm_completion(order.order_uid),
                 )
-        except Exception as e:
-            logger.error(f"Failed to notify dispatcher about completion: {e}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to notify dispatcher destination {chat_id} about completion: {e}"
+                )
 
     async def send_sla_alert(self, order: Order, alert_key: str) -> None:
         """Send SLA violation alert to dispatchers."""
         text = t(alert_key, lang="uz", order_uid=order.order_uid)
         try:
             chat_ids = await self._get_dispatcher_chat_ids()
-            for chat_id in chat_ids:
+        except Exception as e:
+            logger.error(f"Failed to resolve dispatcher destinations: {e}")
+            return
+
+        for chat_id in chat_ids:
+            try:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
                     parse_mode="HTML",
                 )
-        except Exception as e:
-            logger.error(f"Failed to send SLA alert: {e}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to send SLA alert to dispatcher destination {chat_id}: {e}"
+                )

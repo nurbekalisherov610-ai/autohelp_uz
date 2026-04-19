@@ -232,7 +232,6 @@ async def start_assign_master(
 async def assign_master_to_order(
     callback: CallbackQuery,
     session: AsyncSession,
-    bot: Bot,
     state: FSMContext,
     user_data: Staff | None = None,
 ):
@@ -243,10 +242,9 @@ async def assign_master_to_order(
 
     order_service = OrderService(session)
     master_repo = MasterRepo(session)
-    order_repo = OrderRepo(session)
 
     try:
-        order = await order_service.assign_master(
+        await order_service.assign_master(
             order_uid=order_uid,
             master_id=master_id,
             dispatcher_id=user_data.id if user_data else None,
@@ -274,12 +272,9 @@ async def assign_master_to_order(
     )
     await state.set_state(DispatcherOrderStates.recording_video)
 
-    # Notify the master
-    order = await order_repo.get_by_uid(order_uid)
-    if order and master:
-        notification = NotificationService(bot, session)
-        await notification.notify_master_new_assignment(order, master, order.user)
-        await notification.notify_client_status_update(order, "status_assigned")
+    await callback.message.answer(
+        "Video yuborilgandan keyin usta xabardor qilinadi.",
+    )
 
     await callback.answer()
 
@@ -291,7 +286,6 @@ async def assign_master_to_order(
 async def auto_assign_master(
     callback: CallbackQuery,
     session: AsyncSession,
-    bot: Bot,
     state: FSMContext,
     user_data: Staff | None = None,
 ):
@@ -309,7 +303,7 @@ async def auto_assign_master(
 
     order_service = OrderService(session)
     try:
-        order = await order_service.assign_master(
+        await order_service.assign_master(
             order_uid=order_uid,
             master_id=best.id,
             dispatcher_id=user_data.id if user_data else None,
@@ -334,13 +328,9 @@ async def auto_assign_master(
     await state.update_data(video_order_uid=order_uid, assigned_master_id=best.id)
     await state.set_state(DispatcherOrderStates.recording_video)
 
-    # Notify
-    order_repo = OrderRepo(session)
-    order = await order_repo.get_by_uid(order_uid)
-    if order:
-        notification = NotificationService(bot, session)
-        await notification.notify_master_new_assignment(order, best, order.user)
-        await notification.notify_client_status_update(order, "status_assigned")
+    await callback.message.answer(
+        "Video yuborilgandan keyin usta xabardor qilinadi.",
+    )
 
     await callback.answer()
 
@@ -368,19 +358,35 @@ async def process_dispatcher_video(
     # Save video file_id
     video_file_id = message.video_note.file_id
     order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await state.clear()
+        await message.answer("❌ Buyurtma topilmadi. Qaytadan urinib ko'ring.")
+        return
+    if order.status != OrderStatus.ASSIGNED:
+        await state.clear()
+        await message.answer(
+            f"⚠️ Buyurtma <code>{order_uid}</code> endi dispatcher videosini kutmayapti.",
+            parse_mode="HTML",
+        )
+        return
+
     await order_repo.set_dispatcher_video(order_uid, video_file_id)
 
-    # Forward to client
-    order = await order_repo.get_by_uid(order_uid)
-    if order:
-        notification = NotificationService(bot, session)
-        await notification.send_dispatcher_video_to_client(order, video_file_id)
+    notification = NotificationService(bot, session)
+    await notification.send_dispatcher_video_to_client(order, video_file_id)
+
+    master_notified = False
+    if order.master and order.user:
+        await notification.notify_master_new_assignment(order, order.master, order.user)
+        await notification.notify_client_status_update(order, "status_assigned")
+        master_notified = True
 
     await state.clear()
     await message.answer(
         f"✅ Video xabar yuborildi!\n"
-        f"Mijoz buyurtma <code>{order_uid}</code> uchun "
-        f"tasdiqlash videosini oldi.",
+        f"Mijoz buyurtma <code>{order_uid}</code> uchun tasdiqlash videosini oldi.\n"
+        f"{'Usta ham xabardor qilindi.' if master_notified else 'Ustani xabardor qilib bo&#39;lmadi.'}",
         parse_mode="HTML",
     )
 
