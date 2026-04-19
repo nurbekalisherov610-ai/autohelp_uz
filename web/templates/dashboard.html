@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoHelp.uz — Admin Panel</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- HTMX for dynamic updates -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+
+    <style>
+        :root {
+            --bg-primary: #0f1117;
+            --bg-card: #1a1d27;
+            --bg-card-hover: #22263a;
+            --border: #2a2e3e;
+            --text-primary: #e4e6f0;
+            --text-secondary: #8b8fa3;
+            --accent-blue: #4f8cff;
+            --accent-green: #34d399;
+            --accent-yellow: #fbbf24;
+            --accent-red: #f87171;
+            --accent-purple: #a78bfa;
+            --radius: 12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .header h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        .header .status .dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            transition: all 0.2s ease;
+        }
+        .stat-card:hover {
+            background: var(--bg-card-hover);
+            transform: translateY(-2px);
+            border-color: var(--accent-blue);
+        }
+        .stat-card .label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .stat-card .value {
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+        .stat-card .value.blue { color: var(--accent-blue); }
+        .stat-card .value.green { color: var(--accent-green); }
+        .stat-card .value.yellow { color: var(--accent-yellow); }
+        .stat-card .value.red { color: var(--accent-red); }
+        .stat-card .value.purple { color: var(--accent-purple); }
+
+        /* Section */
+        .section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .section h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+        td {
+            font-size: 0.9rem;
+        }
+        tr:hover td {
+            background: var(--bg-card-hover);
+        }
+
+        /* Status badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge.online { background: rgba(52,211,153,0.15); color: var(--accent-green); }
+        .badge.busy { background: rgba(251,191,36,0.15); color: var(--accent-yellow); }
+        .badge.offline { background: rgba(248,113,113,0.15); color: var(--accent-red); }
+
+        /* Rating */
+        .stars { color: var(--accent-yellow); }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .header { padding: 12px 16px; }
+            .container { padding: 16px; }
+            th, td { padding: 8px 10px; font-size: 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>🚗 AutoHelp.uz Admin</h1>
+        <div class="status">
+            <span class="dot"></span>
+            <span>Bot ishlayapti • {{ now.strftime('%H:%M %d.%m.%Y') }}</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Stats Cards -->
+        <div class="stats-grid" hx-get="/api/stats" hx-trigger="every 30s" hx-swap="none">
+            <div class="stat-card">
+                <div class="label">Bugungi buyurtmalar</div>
+                <div class="value blue">{{ stats.today_orders }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Tugallangan</div>
+                <div class="value green">{{ stats.today_completed }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Bugungi summa</div>
+                <div class="value green">{{ "{:,.0f}".format(stats.today_sum) }} so'm</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Oylik summa</div>
+                <div class="value purple">{{ "{:,.0f}".format(stats.monthly_sum) }} so'm</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">O'rtacha reyting</div>
+                <div class="value yellow">⭐ {{ "%.1f"|format(stats.avg_rating) }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Online ustalar</div>
+                <div class="value blue">{{ stats.online_masters }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Faol buyurtmalar</div>
+                <div class="value yellow">{{ stats.active_orders }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Bekor qilish %</div>
+                <div class="value red">{{ stats.cancelled_rate }}%</div>
+            </div>
+        </div>
+
+        <!-- Master Leaderboard -->
+        <div class="section">
+            <h2>🏆 Ustalar reytingi</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Ism</th>
+                        <th>Holat</th>
+                        <th>Reyting</th>
+                        <th>Bajarilgan</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for master in leaderboard %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td><strong>{{ master.name }}</strong></td>
+                        <td>
+                            <span class="badge {{ master.status }}">
+                                {{ master.status }}
+                            </span>
+                        </td>
+                        <td><span class="stars">⭐</span> {{ "%.1f"|format(master.rating) }}</td>
+                        <td>{{ master.completed }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
