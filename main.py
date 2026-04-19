@@ -3,7 +3,9 @@ AutoHelp.uz — Main Entry Point
 Initializes the bot, registers handlers, starts scheduler, and runs polling.
 """
 import asyncio
+import os
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 # Add project root to Python path
@@ -35,6 +37,80 @@ from bot.middlewares import DbSessionMiddleware, AuthMiddleware, ThrottlingMiddl
 from tasks.sla_monitor import check_sla_violations
 from tasks.backup import run_daily_backup
 from tasks.reports import send_daily_report, send_weekly_report
+
+
+POLL_LOCK_TTL_SECONDS = 120
+POLL_LOCK_REFRESH_SECONDS = 40
+
+
+async def _polling_lock_heartbeat(redis, key: str, token: str, stop_event: asyncio.Event):
+    """
+    Keep polling lock alive while this instance is active.
+    If lock ownership changes, stop refreshing.
+    """
+    try:
+        while not stop_event.is_set():
+            await asyncio.sleep(POLL_LOCK_REFRESH_SECONDS)
+            current = await redis.get(key)
+            if current != token:
+                logger.warning("Polling lock ownership changed; heartbeat stopped.")
+                return
+            await redis.expire(key, POLL_LOCK_TTL_SECONDS)
+    except Exception as e:
+        logger.warning(f"Polling lock heartbeat error: {e}")
+
+
+async def acquire_polling_lock():
+    """
+    Acquire a distributed lock so only one bot instance does long polling.
+    Returns (redis, key, token, stop_event, heartbeat_task) or None.
+    """
+    if not settings.use_redis:
+        logger.warning("Redis not configured; single-instance lock is disabled.")
+        return None
+
+    from core.redis import get_redis
+
+    redis = await get_redis()
+    bot_id_part = settings.bot_token.split(":", 1)[0]
+    key = f"autohelp:polling_lock:{bot_id_part}"
+    token = f"{os.getenv('RAILWAY_REPLICA_ID', 'local')}:{os.getpid()}"
+
+    acquired = await redis.set(key, token, nx=True, ex=POLL_LOCK_TTL_SECONDS)
+    if not acquired:
+        holder = await redis.get(key)
+        logger.error(
+            f"Another polling instance is already active (lock holder: {holder}). "
+            "This instance will exit to avoid TelegramConflictError."
+        )
+        return None
+
+    stop_event = asyncio.Event()
+    heartbeat_task = asyncio.create_task(
+        _polling_lock_heartbeat(redis, key, token, stop_event)
+    )
+    logger.info("✅ Polling lock acquired")
+    return redis, key, token, stop_event, heartbeat_task
+
+
+async def release_polling_lock(lock_state):
+    """Release polling lock if this instance still owns it."""
+    if not lock_state:
+        return
+
+    redis, key, token, stop_event, heartbeat_task = lock_state
+    stop_event.set()
+    heartbeat_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await heartbeat_task
+
+    try:
+        current = await redis.get(key)
+        if current == token:
+            await redis.delete(key)
+            logger.info("✅ Polling lock released")
+    except Exception as e:
+        logger.warning(f"Failed to release polling lock: {e}")
 
 
 async def create_storage():
@@ -202,6 +278,12 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    # Acquire distributed lock (prevents multi-instance polling conflicts)
+    lock_state = await acquire_polling_lock()
+    if settings.use_redis and not lock_state:
+        await bot.session.close()
+        return
+
     # Create FSM storage (Redis or Memory)
     storage = await create_storage()
 
@@ -253,6 +335,7 @@ async def main():
         )
     finally:
         scheduler.shutdown(wait=False)
+        await release_polling_lock(lock_state)
         await bot.session.close()
 
 
