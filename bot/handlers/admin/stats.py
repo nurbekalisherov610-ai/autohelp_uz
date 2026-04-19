@@ -17,6 +17,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
 from bot.filters.role_filter import RoleFilter
+from bot.filters.role_filter import _get_admin_ids
 from bot.keyboards.admin_kb import (
     admin_main_menu, admin_orders_filter, admin_master_actions,
     admin_export_options, admin_reports_period, admin_back_button,
@@ -29,7 +30,6 @@ from models.review import Review
 from repositories.order_repo import OrderRepo
 from repositories.master_repo import MasterRepo
 from repositories.stats_repo import StatsRepo
-from core.config import settings
 
 router = Router(name="admin")
 
@@ -78,7 +78,7 @@ async def admin_start_denied(message: Message):
     """Friendly access-denied message when user has no admin privileges."""
     # Safety net: if middleware role detection failed but env contains this ID,
     # still allow admin panel access.
-    if message.from_user and message.from_user.id in settings.admin_ids:
+    if message.from_user and message.from_user.id in _get_admin_ids():
         await admin_start(message)
         return
 
@@ -737,4 +737,8 @@ async def admin_callback_fallback(callback: CallbackQuery):
 )
 async def admin_callback_denied(callback: CallbackQuery):
     """Access denied fallback for non-admin users tapping admin buttons."""
+    if callback.from_user and callback.from_user.id in _get_admin_ids():
+        # If ID is admin in env but role chain missed it, recover to menu.
+        await admin_menu_cb(callback)
+        return
     await callback.answer("⛔ Admin panel huquqi yo'q", show_alert=True)
