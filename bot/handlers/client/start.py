@@ -32,12 +32,14 @@ async def cmd_start(
     user_lang: str = "uz",
 ):
     """Handle /start command."""
-    await state.clear()
-    draft_repo = OrderDraftRepo(session)
-    await draft_repo.clear(message.from_user.id)
+    current_state = await state.get_state()
+    state_data = await state.get_data()
 
     # Existing user — go straight to main menu
     if user_role == "client" and user_data:
+        await state.clear()
+        draft_repo = OrderDraftRepo(session)
+        await draft_repo.clear(message.from_user.id)
         await message.answer(
             t("main_menu", user_lang),
             parse_mode="HTML",
@@ -52,6 +54,24 @@ async def cmd_start(
         
     if user_role in ("dispatcher", "master"):
         return
+
+    # New user already selected language once; keep the flow smooth.
+    saved_lang = state_data.get("language")
+    if (
+        user_role == "new"
+        and current_state == RegistrationStates.waiting_contact.state
+        and saved_lang in ("uz", "ru")
+    ):
+        await message.answer(
+            t("share_contact", saved_lang),
+            parse_mode="HTML",
+            reply_markup=share_contact_keyboard(saved_lang),
+        )
+        return
+
+    await state.clear()
+    draft_repo = OrderDraftRepo(session)
+    await draft_repo.clear(message.from_user.id)
 
     # New user — start registration
     await message.answer(
@@ -76,6 +96,16 @@ async def process_language_selection(
     lang = callback.data.split(":")[1]
     if lang not in ("uz", "ru"):
         await callback.answer()
+        return
+
+    current_state = await state.get_state()
+    state_data = await state.get_data()
+    if (
+        user_role == "new"
+        and current_state == RegistrationStates.waiting_contact.state
+        and state_data.get("language") == lang
+    ):
+        await callback.answer("Til allaqachon tanlangan.")
         return
 
     # If user is changing language from settings

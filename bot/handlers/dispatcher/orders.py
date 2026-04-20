@@ -35,6 +35,70 @@ from repositories.stats_repo import StatsRepo
 router = Router(name="dispatcher")
 
 
+def _dispatcher_video_prompt_text(order_uid: str) -> str:
+    return (
+        f"{t('dispatcher_video_prompt', 'uz')}\n\n"
+        f"Buyurtma: <code>{order_uid}</code>\n"
+        "Agar bosqich yo'qolsa: <code>/video ORDER_UID</code>"
+    )
+
+
+async def _complete_dispatcher_video_step(
+    *,
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+    order_uid: str,
+    video_file_id: str,
+    video_kind: str = "video_note",
+) -> None:
+    """Finalize dispatcher video confirmation and downstream notifications."""
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await state.clear()
+        await message.answer("❌ Buyurtma topilmadi. Qaytadan urinib ko'ring.")
+        return
+    if order.status != OrderStatus.ASSIGNED:
+        await state.clear()
+        await message.answer(
+            f"⚠️ Buyurtma <code>{order_uid}</code> endi dispatcher videosini kutmayapti.",
+            parse_mode="HTML",
+        )
+        return
+    if order.dispatcher_video_file_id:
+        await state.clear()
+        await message.answer(
+            f"ℹ️ Buyurtma <code>{order_uid}</code> uchun dispatcher videosi allaqachon yuborilgan.",
+            parse_mode="HTML",
+        )
+        return
+
+    await order_repo.set_dispatcher_video(order_uid, video_file_id)
+
+    notification = NotificationService(bot, session)
+    await notification.send_dispatcher_video_to_client(
+        order=order,
+        video_file_id=video_file_id,
+        video_kind=video_kind,
+    )
+
+    master_notified = False
+    if order.master and order.user:
+        await notification.notify_master_new_assignment(order, order.master, order.user)
+        await notification.notify_client_status_update(order, "status_assigned")
+        master_notified = True
+
+    await state.clear()
+    await message.answer(
+        f"✅ Video xabar yuborildi!\n"
+        f"Mijoz buyurtma <code>{order_uid}</code> uchun tasdiqlash videosini oldi.\n"
+        f"{'Usta ham xabardor qilindi.' if master_notified else 'Ustani xabardor qilib bo&#39;lmadi.'}",
+        parse_mode="HTML",
+    )
+
+
 async def _render_master_picker(
     callback: CallbackQuery,
     state: FSMContext,
@@ -435,6 +499,7 @@ async def process_master_search(
 async def assign_master_to_order(
     callback: CallbackQuery,
     session: AsyncSession,
+    bot: Bot,
     state: FSMContext,
     user_data: Staff | None = None,
 ):
@@ -467,7 +532,7 @@ async def assign_master_to_order(
 
     # Ask dispatcher for video confirmation
     await callback.message.answer(
-        t("dispatcher_video_prompt", "uz"),
+        _dispatcher_video_prompt_text(order_uid),
         parse_mode="HTML",
     )
     await state.update_data(
@@ -480,6 +545,18 @@ async def assign_master_to_order(
         "Majburiy bosqich: video yuborilgandan keyingina usta xabardor qilinadi.",
     )
 
+    # If assignment happened outside private chat, also prompt in private DM.
+    chat = callback.message.chat if callback.message else None
+    if chat and chat.id != callback.from_user.id:
+        try:
+            await bot.send_message(
+                callback.from_user.id,
+                _dispatcher_video_prompt_text(order_uid),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
     await callback.answer()
 
 
@@ -490,6 +567,7 @@ async def assign_master_to_order(
 async def auto_assign_master(
     callback: CallbackQuery,
     session: AsyncSession,
+    bot: Bot,
     state: FSMContext,
     user_data: Staff | None = None,
 ):
@@ -535,7 +613,7 @@ async def auto_assign_master(
 
     # Ask for video
     await callback.message.answer(
-        t("dispatcher_video_prompt", "uz"),
+        _dispatcher_video_prompt_text(order_uid),
         parse_mode="HTML",
     )
     await state.update_data(video_order_uid=order_uid, assigned_master_id=best.id)
@@ -544,6 +622,18 @@ async def auto_assign_master(
     await callback.message.answer(
         "Majburiy bosqich: video yuborilgandan keyingina usta xabardor qilinadi.",
     )
+
+    # If assignment happened outside private chat, also prompt in private DM.
+    chat = callback.message.chat if callback.message else None
+    if chat and chat.id != callback.from_user.id:
+        try:
+            await bot.send_message(
+                callback.from_user.id,
+                _dispatcher_video_prompt_text(order_uid),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
     await callback.answer()
 
@@ -566,58 +656,214 @@ async def process_dispatcher_video(
 
     if not order_uid:
         await state.clear()
+        await message.answer("⚠️ Avval buyurtmaga usta tayinlang. Keyin video yuboring.")
         return
 
-    # Save video file_id
-    video_file_id = message.video_note.file_id
-    order_repo = OrderRepo(session)
-    order = await order_repo.get_by_uid(order_uid)
-    if not order:
-        await state.clear()
-        await message.answer("❌ Buyurtma topilmadi. Qaytadan urinib ko'ring.")
-        return
-    if order.status != OrderStatus.ASSIGNED:
-        await state.clear()
-        await message.answer(
-            f"⚠️ Buyurtma <code>{order_uid}</code> endi dispatcher videosini kutmayapti.",
-            parse_mode="HTML",
-        )
-        return
-
-    await order_repo.set_dispatcher_video(order_uid, video_file_id)
-
-    notification = NotificationService(bot, session)
-    await notification.send_dispatcher_video_to_client(order, video_file_id)
-
-    master_notified = False
-    if order.master and order.user:
-        await notification.notify_master_new_assignment(order, order.master, order.user)
-        await notification.notify_client_status_update(order, "status_assigned")
-        master_notified = True
-
-    await state.clear()
-    await message.answer(
-        f"✅ Video xabar yuborildi!\n"
-        f"Mijoz buyurtma <code>{order_uid}</code> uchun tasdiqlash videosini oldi.\n"
-        f"{'Usta ham xabardor qilindi.' if master_notified else 'Ustani xabardor qilib bo&#39;lmadi.'}",
-        parse_mode="HTML",
+    await _complete_dispatcher_video_step(
+        message=message,
+        state=state,
+        session=session,
+        bot=bot,
+        order_uid=order_uid,
+        video_file_id=message.video_note.file_id,
+        video_kind="video_note",
     )
 
 
 @router.message(
     DispatcherOrderStates.recording_video,
-    ~F.video_note,
+    F.video,
+)
+async def process_dispatcher_video_file(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+):
+    """Handle regular dispatcher video as fallback if video_note is unavailable."""
+    data = await state.get_data()
+    order_uid = data.get("video_order_uid")
+    if not order_uid:
+        await state.clear()
+        await message.answer("⚠️ Avval buyurtmaga usta tayinlang. Keyin video yuboring.")
+        return
+
+    duration = int(getattr(message.video, "duration", 0) or 0)
+    if duration > 30:
+        await message.answer(
+            "⚠️ Iltimos, tasdiqlash videosi 30 soniyadan oshmasin.",
+        )
+        return
+
+    await _complete_dispatcher_video_step(
+        message=message,
+        state=state,
+        session=session,
+        bot=bot,
+        order_uid=order_uid,
+        video_file_id=message.video.file_id,
+        video_kind="video",
+    )
+
+
+@router.message(
+    DispatcherOrderStates.recording_video,
+    ~(F.video_note | F.video),
 )
 async def wrong_video_format(message: Message):
-    """Handle non-video_note messages during video recording state."""
+    """Handle non-video messages during video recording state."""
     await message.answer(
-        "⚠️ Iltimos, <b>dumaloq video</b> (video xabar) yuboring!\n"
-        "Telegram kamerasini oching va dumaloq videoni yozib yuboring.",
+        "⚠️ Iltimos, dumaloq video yoki oddiy video yuboring (30 soniyagacha).\n"
+        "Kerak bo'lsa /video ORDER_UID buyrug'ini yuboring.",
         parse_mode="HTML",
     )
 
 
 # ── Confirm completed order ───────────────────────────────────────
+
+@router.message(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.text.startswith("/video"),
+)
+async def arm_dispatcher_video_mode(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+):
+    """
+    Manually arm video confirmation mode.
+    Usage:
+    - /video            -> auto-pick if one pending
+    - /video ORDER_UID  -> target a specific assigned order
+    """
+    parts = (message.text or "").strip().split(maxsplit=1)
+    requested_uid = parts[1].strip() if len(parts) > 1 else None
+
+    order_repo = OrderRepo(session)
+    pending = await order_repo.get_pending_dispatcher_video_orders(
+        dispatcher_telegram_id=message.from_user.id,
+        limit=10,
+    )
+    if not pending:
+        await message.answer(
+            "ℹ️ Sizda dispatcher videosi kutilayotgan buyurtma topilmadi."
+        )
+        return
+
+    target_order = None
+    if requested_uid:
+        requested_uid_norm = requested_uid.upper()
+        for order in pending:
+            if (order.order_uid or "").upper() == requested_uid_norm:
+                target_order = order
+                break
+        if not target_order:
+            await message.answer(
+                f"⚠️ <code>{escape(requested_uid)}</code> topilmadi yoki video allaqachon yuborilgan.",
+                parse_mode="HTML",
+            )
+            return
+    elif len(pending) == 1:
+        target_order = pending[0]
+    else:
+        lines = ["🎥 Bir nechta buyurtma video tasdiq kutmoqda:"]
+        for order in pending[:5]:
+            lines.append(f"• <code>{order.order_uid}</code>")
+        lines.append("\nKeraklisini tanlash uchun yuboring:")
+        lines.append("<code>/video ORDER_UID</code>")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+        return
+
+    await state.update_data(video_order_uid=target_order.order_uid)
+    await state.set_state(DispatcherOrderStates.recording_video)
+    await message.answer(
+        _dispatcher_video_prompt_text(target_order.order_uid),
+        parse_mode="HTML",
+    )
+
+
+@router.message(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.video_note,
+)
+async def process_dispatcher_video_without_state(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+):
+    """Fallback: accept dispatcher video even if FSM state context was lost."""
+    if await state.get_state() == DispatcherOrderStates.recording_video.state:
+        return
+
+    order_repo = OrderRepo(session)
+    pending = await order_repo.get_pending_dispatcher_video_orders(
+        dispatcher_telegram_id=message.from_user.id,
+        limit=2,
+    )
+    if not pending:
+        return
+    if len(pending) > 1:
+        await message.answer(
+            "🎥 Bir nechta buyurtma kutmoqda. Iltimos, avval <code>/video ORDER_UID</code> yuboring.",
+            parse_mode="HTML",
+        )
+        return
+
+    await _complete_dispatcher_video_step(
+        message=message,
+        state=state,
+        session=session,
+        bot=bot,
+        order_uid=pending[0].order_uid,
+        video_file_id=message.video_note.file_id,
+        video_kind="video_note",
+    )
+
+
+@router.message(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.video,
+)
+async def process_dispatcher_video_file_without_state(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+):
+    """Fallback: accept regular dispatcher video when FSM state is lost."""
+    if await state.get_state() == DispatcherOrderStates.recording_video.state:
+        return
+
+    duration = int(getattr(message.video, "duration", 0) or 0)
+    if duration > 30:
+        await message.answer("⚠️ Video 30 soniyadan oshmasin.")
+        return
+
+    order_repo = OrderRepo(session)
+    pending = await order_repo.get_pending_dispatcher_video_orders(
+        dispatcher_telegram_id=message.from_user.id,
+        limit=2,
+    )
+    if not pending:
+        return
+    if len(pending) > 1:
+        await message.answer(
+            "🎥 Bir nechta buyurtma kutmoqda. Iltimos, avval <code>/video ORDER_UID</code> yuboring.",
+            parse_mode="HTML",
+        )
+        return
+
+    await _complete_dispatcher_video_step(
+        message=message,
+        state=state,
+        session=session,
+        bot=bot,
+        order_uid=pending[0].order_uid,
+        video_file_id=message.video.file_id,
+        video_kind="video",
+    )
+
 
 @router.callback_query(
     RoleFilter("dispatcher", "admin", "super_admin"),

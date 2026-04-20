@@ -138,6 +138,7 @@ async def process_problem_type(
 ):
     """Handle problem type selection."""
     problem_value = callback.data.split(":")[1]
+    await callback.answer()
     await state.update_data(problem_type=problem_value)
 
     problem_type = ProblemType(problem_value)
@@ -171,7 +172,6 @@ async def process_problem_type(
             user_lang=user_lang,
             state_name=OrderCreationStates.entering_description.state,
         )
-        await callback.answer()
     else:
         # Known problem → description is optional
         if user_lang == "uz":
@@ -199,10 +199,10 @@ async def process_problem_type(
             state_name=OrderCreationStates.sharing_location.state,
         )
         await callback.message.answer(
-            "📍" if user_lang == "uz" else "📍",
+            t("share_location", user_lang),
+            parse_mode="HTML",
             reply_markup=share_location_keyboard(user_lang),
         )
-        await callback.answer()
 
 
 # ── Step 2: Description (REQUIRED for OTHER, collected then go to location) ─

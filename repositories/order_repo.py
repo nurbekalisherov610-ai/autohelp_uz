@@ -150,6 +150,44 @@ class OrderRepo:
         )
         return list(result.all())
 
+    async def get_pending_dispatcher_video_orders(
+        self,
+        dispatcher_telegram_id: int,
+        limit: int = 5,
+    ) -> list[Order]:
+        """
+        Get ASSIGNED orders waiting for dispatcher video, routed by who assigned them.
+        Works for both staff dispatchers and env-admin dispatchers.
+        """
+        assigned_by_subq = (
+            select(
+                OrderStatusHistory.order_id.label("order_id"),
+                func.max(OrderStatusHistory.id).label("last_assign_history_id"),
+            )
+            .where(
+                OrderStatusHistory.new_status == OrderStatus.ASSIGNED,
+                OrderStatusHistory.changed_by_telegram_id == dispatcher_telegram_id,
+            )
+            .group_by(OrderStatusHistory.order_id)
+            .subquery()
+        )
+
+        result = await self.session.scalars(
+            select(Order)
+            .join(assigned_by_subq, assigned_by_subq.c.order_id == Order.id)
+            .where(
+                Order.status == OrderStatus.ASSIGNED,
+                Order.dispatcher_video_file_id.is_(None),
+            )
+            .options(
+                selectinload(Order.user),
+                selectinload(Order.master),
+            )
+            .order_by(Order.assigned_at.desc(), Order.id.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
     # ── Update Status ─────────────────────────────────────────────
 
     async def update_status(

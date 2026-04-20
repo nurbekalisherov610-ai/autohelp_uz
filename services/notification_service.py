@@ -120,8 +120,12 @@ class NotificationService:
         # bot_only and hybrid keep action buttons in direct chats.
         action_ids = list(dict.fromkeys(dispatcher_ids + admin_mirror_ids))
 
-        # Safety fallback: if staff routing is empty but group exists, use group.
-        if not action_ids and settings.dispatcher_group_id:
+        # Safety fallback: only hybrid may fall back to group for actions.
+        if (
+            settings.dispatch_mode == "hybrid"
+            and not action_ids
+            and settings.dispatcher_group_id
+        ):
             return [settings.dispatcher_group_id]
         return action_ids
 
@@ -129,9 +133,13 @@ class NotificationService:
         """
         Optional non-interactive mirror destinations.
         - hybrid: mirror to group if configured
-        - bot_only/group_only: no extra mirror
+        - bot_only: keep group as archive/backup mirror if configured
+        - group_only: no extra mirror (group is action destination already)
         """
-        if settings.dispatch_mode == "hybrid" and settings.dispatcher_group_id:
+        if (
+            settings.dispatch_mode in {"hybrid", "bot_only"}
+            and settings.dispatcher_group_id
+        ):
             return [settings.dispatcher_group_id]
         return []
 
@@ -259,16 +267,23 @@ class NotificationService:
             logger.error(f"Failed to notify client {order.user.telegram_id}: {e}")
 
     async def send_dispatcher_video_to_client(
-        self, order: Order, video_file_id: str
+        self, order: Order, video_file_id: str, video_kind: str = "video_note"
     ) -> None:
         """Forward dispatcher's confirmation video to the client."""
         if not order.user:
             return
         try:
-            await self.bot.send_video_note(
-                chat_id=order.user.telegram_id,
-                video_note=video_file_id,
-            )
+            if video_kind == "video":
+                await self.bot.send_video(
+                    chat_id=order.user.telegram_id,
+                    video=video_file_id,
+                    caption="🎥",
+                )
+            else:
+                await self.bot.send_video_note(
+                    chat_id=order.user.telegram_id,
+                    video_note=video_file_id,
+                )
             lang = order.user.language.value
             await self.bot.send_message(
                 chat_id=order.user.telegram_id,
