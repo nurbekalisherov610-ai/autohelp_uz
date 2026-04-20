@@ -2,6 +2,8 @@
 AutoHelp.uz - Notification Service
 Handles sending notifications to clients, dispatchers, and masters.
 """
+from html import escape
+
 from aiogram import Bot
 from loguru import logger
 from sqlalchemy import select
@@ -13,7 +15,7 @@ from models.staff import Staff, StaffRole
 from models.user import User
 from locales.texts import t
 from bot.keyboards.dispatcher_kb import (
-    dispatcher_order_actions, master_selection_keyboard, reassign_order_keyboard,
+    dispatcher_order_actions, reassign_order_keyboard,
     dispatcher_confirm_completion,
 )
 from bot.keyboards.master_kb import master_order_response, master_status_update_keyboard
@@ -299,4 +301,49 @@ class NotificationService:
             except Exception as e:
                 logger.error(
                     f"Failed to send SLA alert to dispatcher destination {chat_id}: {e}"
+                )
+
+    async def notify_dispatcher_review_feedback(
+        self,
+        order: Order,
+        rating: int,
+        issue: str | None = None,
+        comment: str | None = None,
+    ) -> None:
+        """
+        Notify dispatcher/admin destinations about client feedback.
+        Includes optional issue and optional comment.
+        """
+        user_name = escape(order.user.full_name) if order.user else "Unknown"
+        master_name = escape(order.master.full_name) if order.master else "Unknown"
+        stars = "⭐" * max(1, min(int(rating), 5))
+        issue_line = f"\n⚠️ Muammo: {escape(issue)}" if issue else ""
+        comment_line = f"\n💬 Izoh: {escape(comment)}" if comment else ""
+
+        text = (
+            f"📝 <b>Yangi mijoz fikri</b>\n\n"
+            f"📋 Buyurtma: <code>{order.order_uid}</code>\n"
+            f"👤 Mijoz: {user_name}\n"
+            f"👨‍🔧 Usta: {master_name}\n"
+            f"⭐ Baho: <b>{stars}</b> ({rating}/5)"
+            f"{issue_line}"
+            f"{comment_line}"
+        )
+
+        try:
+            chat_ids = await self._get_dispatcher_chat_ids()
+        except Exception as e:
+            logger.error(f"Failed to resolve dispatcher destinations: {e}")
+            return
+
+        for chat_id in chat_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to send review feedback to dispatcher destination {chat_id}: {e}"
                 )

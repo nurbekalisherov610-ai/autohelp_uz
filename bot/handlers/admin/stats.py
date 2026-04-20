@@ -24,6 +24,7 @@ from bot.keyboards.admin_kb import (
 )
 from models.order import Order, OrderStatus, PROBLEM_LABELS
 from models.master import Master
+from models.master_specialization import specialization_short_text
 from models.staff import Staff
 from models.user import User
 from models.review import Review
@@ -342,6 +343,8 @@ async def admin_masters(callback: CallbackQuery, session: AsyncSession):
         select(Master).where(Master.is_active == True).order_by(Master.rating.desc())
     )
     masters = list(result.all())
+    master_repo = MasterRepo(session)
+    spec_map = await master_repo.get_specializations_map([m.id for m in masters])
 
     if not masters:
         await _edit_or_send(callback, 
@@ -356,9 +359,11 @@ async def admin_masters(callback: CallbackQuery, session: AsyncSession):
     lines = [f"👨‍🔧 <b>Ustalar ({len(masters)} ta):</b>\n"]
     for m in masters:
         icon = status_icon.get(m.status.value, "⚪")
+        roles = specialization_short_text(spec_map.get(m.id, []))
         lines.append(
             f"{icon} <b>{m.full_name}</b>\n"
             f"   📞 {m.phone} | ⭐{m.rating:.1f}\n"
+            f"   🧩 Rollar: {roles}\n"
             f"   ✅{m.completed_orders} bajargan | ❌{m.rejected_orders} rad\n"
         )
 

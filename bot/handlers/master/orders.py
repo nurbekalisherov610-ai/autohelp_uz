@@ -349,6 +349,14 @@ async def process_master_video(
     user_data: Master | None = None,
 ):
     """Handle master's completion video."""
+    duration = int(getattr(message.video_note, "duration", 0) or 0)
+    if duration > 15:
+        await message.answer(
+            "⚠️ Iltimos, yakunlash videosi 15 soniyadan oshmasin.\n"
+            "Qisqa (0-15 soniya) dumaloq video yuboring.",
+        )
+        return
+
     data = await state.get_data()
     order_uid = data.get("completing_order_uid")
     amount = data.get("payment_amount", 0)

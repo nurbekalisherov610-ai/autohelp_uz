@@ -50,6 +50,12 @@ class Master(Base):
 
     # Relationships
     orders = relationship("Order", back_populates="master", lazy="noload")
+    specializations = relationship(
+        "MasterSpecialization",
+        back_populates="master",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Master(id={self.id}, name={self.full_name}, status={self.status})>"

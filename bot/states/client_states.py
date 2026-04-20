@@ -22,6 +22,7 @@ class OrderCreationStates(StatesGroup):
 class ReviewStates(StatesGroup):
     """Review/rating flow after order completion."""
     selecting_rating = State()
+    selecting_issue = State()
     entering_comment = State()
 
 

@@ -17,6 +17,10 @@ from bot.keyboards.dispatcher_kb import (
 from locales.texts import t
 from core.config import settings
 from models.order import OrderStatus, PROBLEM_LABELS
+from models.master_specialization import (
+    problem_specialization_priority,
+    specialization_short_text,
+)
 from models.staff import Staff
 from services.order_service import OrderService
 from services.notification_service import NotificationService
@@ -96,6 +100,7 @@ async def show_masters_status(
 
     master_repo = MasterRepo(session)
     masters = await master_repo.get_all_active()
+    spec_map = await master_repo.get_specializations_map([m.id for m in masters])
 
     if not masters:
         await callback.message.edit_text("Hech qanday usta topilmadi.")
@@ -105,8 +110,11 @@ async def show_masters_status(
     lines = ["👨‍🔧 <b>Ustalar holati:</b>\n"]
     for m in masters:
         icon = status_icons.get(m.status.value, "⚪")
+        spec_tag = specialization_short_text(
+            spec_map.get(m.id, [])
+        )
         lines.append(
-            f"{icon} {m.full_name} • ⭐{m.rating:.1f} • "
+            f"{icon} {m.full_name} [{spec_tag}] • ⭐{m.rating:.1f} • "
             f"✅{m.completed_orders} buyurtma"
         )
 
@@ -208,11 +216,22 @@ async def start_assign_master(
 ):
     """Show available masters for assignment."""
     order_uid = callback.data.split(":")[1]
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await callback.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+
     master_repo = MasterRepo(session)
-    masters = await master_repo.get_all_active()
+    masters = await master_repo.get_available_masters_for_problem(order.problem_type)
+    spec_map = await master_repo.get_specializations_map([m.id for m in masters])
+    preferred = problem_specialization_priority(order.problem_type.value)
 
     if not masters:
-        await callback.answer("Hech qanday usta topilmadi!", show_alert=True)
+        await callback.answer(
+            "Hozirda mos online/bo'sh usta topilmadi!",
+            show_alert=True,
+        )
         return
 
     await state.update_data(assigning_order_uid=order_uid)
@@ -220,7 +239,12 @@ async def start_assign_master(
     await callback.message.edit_text(
         f"👨‍🔧 Buyurtma <code>{order_uid}</code> uchun usta tanlang:",
         parse_mode="HTML",
-        reply_markup=master_selection_keyboard(masters, order_uid),
+        reply_markup=master_selection_keyboard(
+            masters,
+            order_uid,
+            specialization_map=spec_map,
+            preferred_specializations=preferred,
+        ),
     )
     await callback.answer()
 
@@ -291,8 +315,14 @@ async def auto_assign_master(
 ):
     """Auto-assign the best available master."""
     order_uid = callback.data.split(":")[1]
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await callback.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+
     master_repo = MasterRepo(session)
-    best = await master_repo.get_best_available()
+    best = await master_repo.get_best_available(order.problem_type)
 
     if not best:
         await callback.answer(
@@ -313,10 +343,13 @@ async def auto_assign_master(
         await callback.answer(str(e), show_alert=True)
         return
 
+    best_specs = await master_repo.get_specializations(best.id)
+
     await callback.message.edit_text(
         f"🤖 Tizim taklifi qabul qilindi!\n\n"
         f"✅ Buyurtma <code>{order_uid}</code>\n"
-        f"👨‍🔧 Usta: <b>{best.full_name}</b> ⭐{best.rating:.1f}",
+        f"👨‍🔧 Usta: <b>{best.full_name}</b> "
+        f"[{specialization_short_text(best_specs)}] ⭐{best.rating:.1f}",
         parse_mode="HTML",
     )
 

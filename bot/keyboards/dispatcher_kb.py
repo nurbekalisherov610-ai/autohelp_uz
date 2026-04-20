@@ -5,21 +5,34 @@ Inline keyboards for the dispatcher interface.
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from models.master import Master
+from models.master_specialization import (
+    MasterSpecializationType,
+    specialization_short_text,
+)
 
 
 def master_selection_keyboard(
-    masters: list[Master], order_uid: str
+    masters: list[Master],
+    order_uid: str,
+    specialization_map: dict[int, list[MasterSpecializationType]] | None = None,
+    preferred_specializations: list[MasterSpecializationType] | None = None,
 ) -> InlineKeyboardMarkup:
     """
     Build keyboard with available masters for order assignment.
     Shows master name, rating, and status.
     """
     buttons = []
+    specialization_map = specialization_map or {}
+    preferred = set(preferred_specializations or [])
+
     for m in masters:
         status_icon = {"online": "🟢", "busy": "🟡", "offline": "🔴"}.get(
             m.status.value, "⚪"
         )
-        label = f"{status_icon} {m.full_name} ⭐{m.rating:.1f} ({m.completed_orders} ish)"
+        specs = specialization_map.get(m.id, [MasterSpecializationType.UNIVERSAL])
+        spec_tag = specialization_short_text(specs)
+        pin = "🎯 " if any(spec in preferred for spec in specs) else ""
+        label = f"{pin}{status_icon} {m.full_name} [{spec_tag}] ⭐{m.rating:.1f}"
         buttons.append([InlineKeyboardButton(
             text=label,
             callback_data=f"assign:{order_uid}:{m.id}"

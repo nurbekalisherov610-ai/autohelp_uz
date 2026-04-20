@@ -12,6 +12,12 @@ from models.review import Review
 from models.district import District
 from models.audit import AuditLog
 from models.order_draft import OrderDraft
+from models.master_specialization import (
+    MasterSpecialization,
+    MasterSpecializationType,
+    SPECIALIZATION_LABELS,
+    SPECIALIZATION_SHORT,
+)
 
 __all__ = [
     "User", "Language",
@@ -24,4 +30,8 @@ __all__ = [
     "District",
     "AuditLog",
     "OrderDraft",
+    "MasterSpecialization",
+    "MasterSpecializationType",
+    "SPECIALIZATION_LABELS",
+    "SPECIALIZATION_SHORT",
 ]

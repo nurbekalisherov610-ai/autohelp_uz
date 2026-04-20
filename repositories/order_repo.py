@@ -114,6 +114,7 @@ class OrderRepo:
             select(Order).where(
                 Order.master_id == master_id,
                 Order.status.in_([
+                    OrderStatus.ASSIGNED,
                     OrderStatus.ACCEPTED,
                     OrderStatus.ON_THE_WAY,
                     OrderStatus.ARRIVED,

@@ -1,14 +1,19 @@
 """
 AutoHelp.uz - Master Repository
-Database operations for the masters table.
+Database operations for masters and specialization-based assignment.
 """
 from datetime import datetime
 
-from sqlalchemy import select, update, func
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.master import Master, MasterStatus
-from models.order import Order, OrderStatus
+from models.master_specialization import (
+    MasterSpecialization,
+    MasterSpecializationType,
+    problem_specialization_priority,
+)
+from models.order import Order, OrderStatus, ProblemType
 from models.review import Review
 
 
@@ -30,20 +35,127 @@ class MasterRepo:
             select(Master).where(Master.id == master_id)
         )
 
-    async def get_available_masters(self) -> list[Master]:
-        """Get all online masters."""
+    async def get_specializations(self, master_id: int) -> list[MasterSpecializationType]:
+        """Get specialization tags for a specific master."""
         result = await self.session.scalars(
-            select(Master).where(
+            select(MasterSpecialization.specialization)
+            .where(MasterSpecialization.master_id == master_id)
+            .order_by(MasterSpecialization.specialization)
+        )
+        specs = list(result.all())
+        return specs or [MasterSpecializationType.UNIVERSAL]
+
+    async def get_specializations_map(
+        self,
+        master_ids: list[int] | None = None,
+    ) -> dict[int, list[MasterSpecializationType]]:
+        """Get a mapping of master_id to specialization tags."""
+        query = select(
+            MasterSpecialization.master_id,
+            MasterSpecialization.specialization,
+        )
+        if master_ids is not None:
+            if not master_ids:
+                return {}
+            query = query.where(MasterSpecialization.master_id.in_(master_ids))
+
+        result = await self.session.execute(query.order_by(MasterSpecialization.master_id))
+
+        spec_map: dict[int, list[MasterSpecializationType]] = {}
+        for master_id, specialization in result.all():
+            spec_map.setdefault(master_id, []).append(specialization)
+
+        return spec_map
+
+    async def set_specializations(
+        self,
+        master_id: int,
+        specializations: list[MasterSpecializationType] | None,
+    ) -> None:
+        """Replace specialization tags for a master."""
+        normalized = list(dict.fromkeys(specializations or [MasterSpecializationType.UNIVERSAL]))
+
+        await self.session.execute(
+            delete(MasterSpecialization).where(MasterSpecialization.master_id == master_id)
+        )
+
+        for specialization in normalized:
+            self.session.add(
+                MasterSpecialization(
+                    master_id=master_id,
+                    specialization=specialization,
+                )
+            )
+
+        await self.session.flush()
+
+    async def _get_busy_master_ids(self) -> set[int]:
+        """Get master IDs that currently have active orders."""
+        result = await self.session.scalars(
+            select(Order.master_id).where(
+                Order.master_id.is_not(None),
+                Order.status.in_(
+                    [
+                        OrderStatus.ASSIGNED,
+                        OrderStatus.ACCEPTED,
+                        OrderStatus.ON_THE_WAY,
+                        OrderStatus.ARRIVED,
+                        OrderStatus.IN_PROGRESS,
+                        OrderStatus.AWAITING_CONFIRM,
+                    ]
+                ),
+            )
+        )
+        return {int(master_id) for master_id in result.all() if master_id is not None}
+
+    async def get_available_masters(self) -> list[Master]:
+        """Get online masters that do not hold active orders."""
+        result = await self.session.scalars(
+            select(Master)
+            .where(
                 Master.status == MasterStatus.ONLINE,
                 Master.is_active == True,
-            ).order_by(Master.rating.desc())
+            )
+            .order_by(Master.rating.desc(), Master.completed_orders.desc(), Master.full_name)
         )
-        return list(result.all())
+        masters = list(result.all())
+        if not masters:
+            return []
+
+        busy_ids = await self._get_busy_master_ids()
+        return [m for m in masters if m.id not in busy_ids]
+
+    async def get_available_masters_for_problem(
+        self,
+        problem_type: ProblemType | str | None,
+    ) -> list[Master]:
+        """
+        Get available masters sorted by specialization relevance, then rating.
+        Keeps fallback masters (e.g., universal) at the end.
+        """
+        masters = await self.get_available_masters()
+        if not masters:
+            return []
+
+        problem_value = problem_type.value if isinstance(problem_type, ProblemType) else str(problem_type or "other")
+        priority = problem_specialization_priority(problem_value)
+        priority_index = {spec: idx for idx, spec in enumerate(priority)}
+
+        spec_map = await self.get_specializations_map([m.id for m in masters])
+
+        def master_rank(master: Master) -> tuple[int, float, int, str]:
+            specs = spec_map.get(master.id) or [MasterSpecializationType.UNIVERSAL]
+            best_match = min(priority_index.get(spec, len(priority) + 1) for spec in specs)
+            return (best_match, -float(master.rating or 0.0), -int(master.completed_orders or 0), master.full_name)
+
+        masters.sort(key=master_rank)
+        return masters
 
     async def get_all_active(self) -> list[Master]:
         """Get all active masters (any status)."""
         result = await self.session.scalars(
-            select(Master).where(Master.is_active == True)
+            select(Master)
+            .where(Master.is_active == True)
             .order_by(Master.full_name)
         )
         return list(result.all())
@@ -108,41 +220,13 @@ class MasterRepo:
         )
         return new_rating
 
-    async def get_best_available(self) -> Master | None:
-        """
-        Get the best available master based on:
-        1. Online status
-        2. Highest rating
-        3. Least active orders
-        """
-        # All online masters
-        masters = await self.get_available_masters()
-        if not masters:
-            return None
-
-        # Filter out masters with active orders
-        available = []
-        for m in masters:
-            active_order = await self.session.scalar(
-                select(Order).where(
-                    Order.master_id == m.id,
-                    Order.status.in_([
-                        OrderStatus.ACCEPTED,
-                        OrderStatus.ON_THE_WAY,
-                        OrderStatus.ARRIVED,
-                        OrderStatus.IN_PROGRESS,
-                    ]),
-                )
-            )
-            if not active_order:
-                available.append(m)
-
-        if not available:
-            return None
-
-        # Sort by rating (descending)
-        available.sort(key=lambda m: m.rating, reverse=True)
-        return available[0]
+    async def get_best_available(
+        self,
+        problem_type: ProblemType | str | None = None,
+    ) -> Master | None:
+        """Get the best currently available master for the problem type."""
+        masters = await self.get_available_masters_for_problem(problem_type)
+        return masters[0] if masters else None
 
     async def count_online(self) -> int:
         """Count currently online masters."""
@@ -158,7 +242,6 @@ class MasterRepo:
         self, master_id: int, since: datetime | None = None,
     ) -> dict:
         """Get statistics for a specific master."""
-        # Total orders
         total_q = select(func.count(Order.id)).where(
             Order.master_id == master_id
         )
@@ -166,7 +249,6 @@ class MasterRepo:
             total_q = total_q.where(Order.created_at >= since)
         total = (await self.session.scalar(total_q)) or 0
 
-        # Completed orders (fresh query, not chained)
         completed_q = select(func.count(Order.id)).where(
             Order.master_id == master_id,
             Order.status == OrderStatus.COMPLETED,
@@ -175,7 +257,6 @@ class MasterRepo:
             completed_q = completed_q.where(Order.completed_at >= since)
         completed = (await self.session.scalar(completed_q)) or 0
 
-        # Revenue
         sum_q = select(
             func.coalesce(func.sum(Order.payment_amount), 0.0)
         ).where(

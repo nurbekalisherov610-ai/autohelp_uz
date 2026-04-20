@@ -125,6 +125,34 @@ def rating_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def review_issue_keyboard(lang: str = "uz") -> InlineKeyboardMarkup:
+    """Optional post-rating issue picker."""
+    labels = {
+        "uz": {
+            "none": "✅ Muammo yo'q",
+            "delay": "🕒 Kechikish",
+            "quality": "🔧 Sifat past",
+            "price": "💰 Narx bo'yicha e'tiroz",
+            "behavior": "🙅 Muomala yomon",
+        },
+        "ru": {
+            "none": "✅ Нет проблем",
+            "delay": "🕒 Опоздание",
+            "quality": "🔧 Низкое качество",
+            "price": "💰 Вопрос по цене",
+            "behavior": "🙅 Плохое поведение",
+        },
+    }
+    l = labels.get(lang, labels["uz"])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=l["none"], callback_data="review_issue:none")],
+        [InlineKeyboardButton(text=l["delay"], callback_data="review_issue:delay")],
+        [InlineKeyboardButton(text=l["quality"], callback_data="review_issue:quality")],
+        [InlineKeyboardButton(text=l["price"], callback_data="review_issue:price")],
+        [InlineKeyboardButton(text=l["behavior"], callback_data="review_issue:behavior")],
+    ])
+
+
 def settings_keyboard(lang: str = "uz") -> InlineKeyboardMarkup:
     """Settings menu keyboard."""
     if lang == "ru":
