@@ -2,6 +2,8 @@
 AutoHelp.uz - Client Start & Registration Handler
 Handles /start, language selection, and contact sharing.
 """
+from html import escape
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
@@ -152,8 +154,10 @@ async def process_contact(
 
     await state.clear()
 
+    safe_name = escape(full_name)
+    safe_phone = escape(phone)
     await message.answer(
-        t("registration_success", lang, name=full_name, phone=phone),
+        t("registration_success", lang, name=safe_name, phone=safe_phone),
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(lang),
     )

@@ -4,6 +4,7 @@ CEO-level monitoring: live stats, orders, reviews, masters, Excel export.
 All buttons work. All errors handled.
 """
 import io
+from html import escape
 from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
@@ -192,8 +193,8 @@ async def admin_active_orders(callback: CallbackQuery, session: AsyncSession):
     lines = [f"⚡ <b>Faol buyurtmalar ({len(orders)}):</b>\n"]
     for order in orders:
         icon = STATUS_EMOJI.get(order.status.value, "•")
-        client = order.user.full_name if order.user else "—"
-        master = order.master.full_name if order.master else "Tayinlanmagan"
+        client = escape(order.user.full_name) if order.user else "—"
+        master = escape(order.master.full_name) if order.master else "Tayinlanmagan"
         problem = PROBLEM_LABELS[order.problem_type]["uz"]
         elapsed = int((datetime.utcnow() - order.created_at.replace(tzinfo=None)).total_seconds() / 60)
 
@@ -267,8 +268,8 @@ async def admin_filter_orders(callback: CallbackQuery, session: AsyncSession):
     lines = [f"📋 <b>{filter_labels.get(filter_type, filter_type)} ({len(orders)}):</b>\n"]
     for order in orders:
         icon = STATUS_EMOJI.get(order.status.value, "•")
-        client = order.user.full_name if order.user else "—"
-        master = order.master.full_name if order.master else "—"
+        client = escape(order.user.full_name) if order.user else "—"
+        master = escape(order.master.full_name) if order.master else "—"
         problem = PROBLEM_LABELS[order.problem_type]["uz"]
         amount = f"💰{order.payment_amount:,.0f}" if order.payment_amount else ""
         date = order.created_at.strftime("%d.%m %H:%M")
@@ -316,10 +317,10 @@ async def admin_reviews(callback: CallbackQuery, session: AsyncSession):
     lines = ["⭐ <b>So'nggi sharhlar:</b>\n"]
     for r in reviews:
         stars = "⭐" * r.rating + "☆" * (5 - r.rating)
-        client = r.user.full_name if r.user else "—"
+        client = escape(r.user.full_name) if r.user else "—"
         order_uid = r.order.order_uid if r.order else "—"
         date = r.created_at.strftime("%d.%m.%Y")
-        comment = f"\n   💬 {r.comment}" if r.comment else ""
+        comment = f"\n   💬 {escape(r.comment)}" if r.comment else ""
 
         lines.append(
             f"{stars}\n"
@@ -360,9 +361,11 @@ async def admin_masters(callback: CallbackQuery, session: AsyncSession):
     for m in masters:
         icon = status_icon.get(m.status.value, "⚪")
         roles = specialization_short_text(spec_map.get(m.id, []))
+        safe_name = escape(m.full_name or "—")
+        safe_phone = escape(m.phone or "—")
         lines.append(
-            f"{icon} <b>{m.full_name}</b>\n"
-            f"   📞 {m.phone} | ⭐{m.rating:.1f}\n"
+            f"{icon} <b>{safe_name}</b>\n"
+            f"   📞 {safe_phone} | ⭐{m.rating:.1f}\n"
             f"   🧩 Rollar: {roles}\n"
             f"   ✅{m.completed_orders} bajargan | ❌{m.rejected_orders} rad\n"
         )
@@ -648,7 +651,9 @@ async def admin_dispatchers(callback: CallbackQuery, session: AsyncSession):
 
     lines = [f"👥 <b>Dispetcherlar ({len(staff_list)} ta):</b>\n"]
     for s in staff_list:
-        lines.append(f"• <b>{s.full_name}</b> | 📞 {s.phone or '—'} | ID: <code>{s.telegram_id}</code>")
+        safe_name = escape(s.full_name or "—")
+        safe_phone = escape(s.phone) if s.phone else "—"
+        lines.append(f"• <b>{safe_name}</b> | 📞 {safe_phone} | ID: <code>{s.telegram_id}</code>")
 
     await _edit_or_send(callback, 
         "\n".join(lines), parse_mode="HTML", reply_markup=admin_back_button()
@@ -669,9 +674,11 @@ async def admin_master_stats_view(callback: CallbackQuery, session: AsyncSession
         return
 
     stats = await master_repo.get_master_stats(master.id)
+    safe_master_name = escape(master.full_name or "—")
+    safe_master_phone = escape(master.phone or "—")
     text = (
-        f"👨‍🔧 <b>{master.full_name}</b>\n\n"
-        f"📞 {master.phone}\n"
+        f"👨‍🔧 <b>{safe_master_name}</b>\n\n"
+        f"📞 {safe_master_phone}\n"
         f"📶 Holat: <b>{master.status.value}</b>\n"
         f"⭐ Reyting: <b>{master.rating:.1f}</b>\n"
         f"📋 Jami ishlar: <b>{stats['total_orders']}</b>\n"

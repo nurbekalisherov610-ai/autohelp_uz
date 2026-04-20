@@ -2,6 +2,7 @@
 AutoHelp.uz - Notification Service
 Handles sending notifications to clients, dispatchers, and masters.
 """
+import asyncio
 from html import escape
 
 from aiogram import Bot
@@ -28,6 +29,57 @@ class NotificationService:
     def __init__(self, bot: Bot, session: AsyncSession):
         self.bot = bot
         self.session = session
+
+    async def _send_order_notification_packet(
+        self,
+        chat_id: int,
+        text: str,
+        order: Order,
+        reply_markup=None,
+    ) -> bool:
+        """Send order notification + location packet to one chat destination."""
+        try:
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            await self.bot.send_location(
+                chat_id=chat_id,
+                latitude=order.latitude,
+                longitude=order.longitude,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to notify dispatcher destination {chat_id} for order {order.order_uid}: {e}"
+            )
+            return False
+
+    async def _send_html_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_markup=None,
+        disable_web_page_preview: bool = False,
+    ) -> bool:
+        """Send one HTML-formatted message safely."""
+        try:
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=disable_web_page_preview,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to send HTML message to destination {chat_id}: {e}"
+            )
+            return False
 
     async def _get_dispatcher_user_ids(self) -> list[int]:
         """Resolve active dispatcher Telegram user IDs."""
@@ -88,17 +140,25 @@ class NotificationService:
     ) -> None:
         """Notify all dispatchers about a new order."""
         lang = "uz"  # Dispatchers use UZ by default
-        problem_label = PROBLEM_LABELS[order.problem_type][lang]
+        problem_label = escape(PROBLEM_LABELS[order.problem_type][lang])
+        client_name = escape(user.full_name or "—")
+        client_phone = escape(user.phone or "—")
+        description = (
+            escape(order.description)
+            if order.description
+            else t("no_description", lang)
+        )
+        maps_url = escape(order.google_maps_url)
 
         text = t(
             "new_order_notification",
             lang=lang,
             order_uid=order.order_uid,
-            client_name=user.full_name,
-            client_phone=user.phone,
+            client_name=client_name,
+            client_phone=client_phone,
             problem=problem_label,
-            description=order.description or t("no_description", lang),
-            maps_url=order.google_maps_url,
+            description=description,
+            maps_url=maps_url,
             time=order.created_at.strftime("%H:%M %d.%m.%Y"),
         )
 
@@ -115,47 +175,26 @@ class NotificationService:
             )
             return
 
-        sent = 0
-        for chat_id in action_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=dispatcher_order_actions(order.order_uid),
-                    disable_web_page_preview=True,
-                )
-
-                # Also send location
-                await self.bot.send_location(
-                    chat_id=chat_id,
-                    latitude=order.latitude,
-                    longitude=order.longitude,
-                )
-                sent += 1
-            except Exception as e:
-                logger.error(
-                    f"Failed to notify dispatcher destination {chat_id} for order {order.order_uid}: {e}"
-                )
-
-        for chat_id in mirror_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-                await self.bot.send_location(
-                    chat_id=chat_id,
-                    latitude=order.latitude,
-                    longitude=order.longitude,
-                )
-                sent += 1
-            except Exception as e:
-                logger.error(
-                    f"Failed to mirror dispatcher notification to {chat_id} for order {order.order_uid}: {e}"
-                )
+        action_tasks = [
+            self._send_order_notification_packet(
+                chat_id=chat_id,
+                text=text,
+                order=order,
+                reply_markup=dispatcher_order_actions(order.order_uid),
+            )
+            for chat_id in action_chat_ids
+        ]
+        mirror_tasks = [
+            self._send_order_notification_packet(
+                chat_id=chat_id,
+                text=text,
+                order=order,
+                reply_markup=None,
+            )
+            for chat_id in mirror_chat_ids
+        ]
+        results = await asyncio.gather(*action_tasks, *mirror_tasks, return_exceptions=False)
+        sent = sum(1 for x in results if x)
 
         logger.info(
             f"Dispatch notification sent to {sent} destination(s) for order {order.order_uid} "
@@ -167,16 +206,19 @@ class NotificationService:
     ) -> None:
         """Notify a master about a new assignment."""
         lang = "uz"
-        problem_label = PROBLEM_LABELS[order.problem_type][lang]
+        problem_label = escape(PROBLEM_LABELS[order.problem_type][lang])
+        description = escape(order.description) if order.description else "—"
+        maps_url = escape(order.google_maps_url)
+        client_phone = escape(user.phone or "—")
 
         text = t(
             "master_new_order",
             lang=lang,
             order_uid=order.order_uid,
             problem=problem_label,
-            description=order.description or "—",
-            maps_url=order.google_maps_url,
-            client_phone=user.phone,
+            description=description,
+            maps_url=maps_url,
+            client_phone=client_phone,
         )
 
         try:
@@ -245,10 +287,11 @@ class NotificationService:
         """Post master's completion video to the verification channel."""
         if not settings.video_channel_id:
             return
+        safe_master_name = escape(master.full_name or "—")
 
         caption = (
             f"✅ Buyurtma: #{order.order_uid}\n"
-            f"👨‍🔧 Usta: {master.full_name}\n"
+            f"👨‍🔧 Usta: {safe_master_name}\n"
             f"💰 Summa: {amount:,.0f} so'm\n"
             f"🕐 {order.completed_at.strftime('%H:%M %d.%m.%Y') if order.completed_at else '—'}"
         )
@@ -270,10 +313,11 @@ class NotificationService:
         self, order: Order, master: Master
     ) -> None:
         """Notify dispatchers that a master rejected an order."""
+        safe_master_name = escape(master.full_name or "—")
         text = (
             f"❌ <b>Usta buyurtmani rad etdi!</b>\n\n"
             f"📋 Buyurtma: #{order.order_uid}\n"
-            f"👨‍🔧 Usta: {master.full_name}\n\n"
+            f"👨‍🔧 Usta: {safe_master_name}\n\n"
             f"Boshqa usta tayinlang 👇"
         )
         try:
@@ -283,30 +327,29 @@ class NotificationService:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in action_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=reassign_order_keyboard(order.order_uid),
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to notify dispatcher destination {chat_id} about rejection: {e}"
-                )
+        if not action_chat_ids and not mirror_chat_ids:
+            logger.warning(
+                f"No dispatcher destination configured for rejection alert on order {order.order_uid}."
+            )
+            return
 
-        for chat_id in mirror_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to mirror rejection notification to {chat_id}: {e}"
-                )
+        action_tasks = [
+            self._send_html_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=reassign_order_keyboard(order.order_uid),
+            )
+            for chat_id in action_chat_ids
+        ]
+        mirror_tasks = [
+            self._send_html_message(chat_id=chat_id, text=text)
+            for chat_id in mirror_chat_ids
+        ]
+        results = await asyncio.gather(*action_tasks, *mirror_tasks, return_exceptions=False)
+        sent = sum(1 for x in results if x)
+        logger.info(
+            f"Rejection alert sent to {sent} destination(s) for order {order.order_uid}."
+        )
 
     async def notify_dispatcher_awaiting_confirm(
         self, order: Order, amount: float
@@ -325,30 +368,29 @@ class NotificationService:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in action_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=dispatcher_confirm_completion(order.order_uid),
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to notify dispatcher destination {chat_id} about completion: {e}"
-                )
+        if not action_chat_ids and not mirror_chat_ids:
+            logger.warning(
+                f"No dispatcher destination configured for awaiting-confirm alert on order {order.order_uid}."
+            )
+            return
 
-        for chat_id in mirror_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to mirror awaiting-confirm notification to {chat_id}: {e}"
-                )
+        action_tasks = [
+            self._send_html_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=dispatcher_confirm_completion(order.order_uid),
+            )
+            for chat_id in action_chat_ids
+        ]
+        mirror_tasks = [
+            self._send_html_message(chat_id=chat_id, text=text)
+            for chat_id in mirror_chat_ids
+        ]
+        results = await asyncio.gather(*action_tasks, *mirror_tasks, return_exceptions=False)
+        sent = sum(1 for x in results if x)
+        logger.info(
+            f"Awaiting-confirm alert sent to {sent} destination(s) for order {order.order_uid}."
+        )
 
     async def send_sla_alert(self, order: Order, alert_key: str) -> None:
         """Send SLA violation alert to dispatchers."""
@@ -360,17 +402,22 @@ class NotificationService:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in action_chat_ids + mirror_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to send SLA alert to dispatcher destination {chat_id}: {e}"
-                )
+        destination_ids = action_chat_ids + mirror_chat_ids
+        if not destination_ids:
+            logger.warning(
+                f"No dispatcher destination configured for SLA alert on order {order.order_uid}."
+            )
+            return
+
+        tasks = [
+            self._send_html_message(chat_id=chat_id, text=text)
+            for chat_id in destination_ids
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        sent = sum(1 for x in results if x)
+        logger.info(
+            f"SLA alert sent to {sent} destination(s) for order {order.order_uid}."
+        )
 
     async def notify_dispatcher_review_feedback(
         self,
@@ -406,14 +453,19 @@ class NotificationService:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in action_chat_ids + mirror_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to send review feedback to dispatcher destination {chat_id}: {e}"
-                )
+        destination_ids = action_chat_ids + mirror_chat_ids
+        if not destination_ids:
+            logger.warning(
+                f"No dispatcher destination configured for review feedback on order {order.order_uid}."
+            )
+            return
+
+        tasks = [
+            self._send_html_message(chat_id=chat_id, text=text)
+            for chat_id in destination_ids
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        sent = sum(1 for x in results if x)
+        logger.info(
+            f"Review feedback sent to {sent} destination(s) for order {order.order_uid}."
+        )

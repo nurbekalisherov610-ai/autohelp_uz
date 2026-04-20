@@ -3,6 +3,8 @@ AutoHelp.uz - Master Handler
 Handles master availability, order acceptance, status updates,
 payment entry, and video confirmation.
 """
+from html import escape
+
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -435,8 +437,9 @@ async def master_call_client(
         await callback.answer("Ma'lumot topilmadi", show_alert=True)
         return
 
+    safe_phone = escape(order.user.phone or "—")
     await callback.message.answer(
-        f"📞 Mijoz telefoni: <code>{order.user.phone}</code>",
+        f"📞 Mijoz telefoni: <code>{safe_phone}</code>",
         parse_mode="HTML",
     )
     await callback.answer()

@@ -2,6 +2,8 @@
 AutoHelp.uz - Dispatcher Handler
 Handles order management, master assignment, and video confirmations.
 """
+from html import escape
+
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -108,8 +110,8 @@ async def show_active_orders(
         }
         icon = status_icons.get(order.status.value, "❓")
         problem = PROBLEM_LABELS[order.problem_type]["uz"]
-        master_name = order.master.full_name if order.master else "—"
-        client_name = order.user.full_name if order.user else "—"
+        master_name = escape(order.master.full_name) if order.master else "—"
+        client_name = escape(order.user.full_name) if order.user else "—"
         lines.append(
             f"{icon} <code>{order.order_uid}</code>\n"
             f"   👤 {client_name} • 👨‍🔧 {master_name}\n"
@@ -148,8 +150,9 @@ async def show_masters_status(
         spec_tag = specialization_short_text(
             spec_map.get(m.id, [])
         )
+        safe_name = escape(m.full_name or "—")
         lines.append(
-            f"{icon} {m.full_name} [{spec_tag}] • ⭐{m.rating:.1f} • "
+            f"{icon} {safe_name} [{spec_tag}] • ⭐{m.rating:.1f} • "
             f"✅{m.completed_orders} buyurtma"
         )
 
@@ -455,9 +458,10 @@ async def assign_master_to_order(
         return
 
     master = await master_repo.get_by_id(master_id)
+    safe_master_name = escape(master.full_name or "—") if master else "—"
     await callback.message.edit_text(
         f"✅ Buyurtma <code>{order_uid}</code> ga usta tayinlandi: "
-        f"<b>{master.full_name}</b>",
+        f"<b>{safe_master_name}</b>",
         parse_mode="HTML",
     )
 
@@ -524,7 +528,7 @@ async def auto_assign_master(
     await callback.message.edit_text(
         f"🤖 Tizim taklifi qabul qilindi!\n\n"
         f"✅ Buyurtma <code>{order_uid}</code>\n"
-        f"👨‍🔧 Usta: <b>{best.full_name}</b> "
+        f"👨‍🔧 Usta: <b>{escape(best.full_name or '—')}</b> "
         f"[{specialization_short_text(best_specs)}] ⭐{best.rating:.1f}",
         parse_mode="HTML",
     )
@@ -835,8 +839,9 @@ async def call_client(
         await callback.answer("Ma'lumot topilmadi", show_alert=True)
         return
 
+    safe_phone = escape(order.user.phone or "—")
     await callback.message.answer(
-        f"📞 Mijoz telefoni: <code>{order.user.phone}</code>",
+        f"📞 Mijoz telefoni: <code>{safe_phone}</code>",
         parse_mode="HTML",
     )
     await callback.answer()

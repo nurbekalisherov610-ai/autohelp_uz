@@ -3,6 +3,8 @@ AutoHelp.uz - Client Order Handler
 Full order creation flow with crystal-clear UX.
 Step 1: Problem type → Step 2: Description → Step 3: Location → Step 4: Confirm
 """
+from html import escape
+
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -276,6 +278,7 @@ async def process_location(
     problem_type = ProblemType(data["problem_type"])
     problem_label = PROBLEM_LABELS[problem_type][user_lang]
     description = data.get("description")
+    safe_description = escape(description) if description else None
 
     text = _step_header(4, lang=user_lang)
     if user_lang == "uz":
@@ -283,8 +286,8 @@ async def process_location(
             "📋 <b>Buyurtmani tasdiqlang:</b>\n\n"
             f"🔧 Muammo: {problem_label}\n"
         )
-        if description:
-            text += f"📝 Izoh: {description}\n"
+        if safe_description:
+            text += f"📝 Izoh: {safe_description}\n"
         text += (
             f"📍 Joylashuv: qabul qilindi ✅\n\n"
             "Tasdiqlaysizmi? 👇"
@@ -294,8 +297,8 @@ async def process_location(
             "📋 <b>Подтвердите заявку:</b>\n\n"
             f"🔧 Проблема: {problem_label}\n"
         )
-        if description:
-            text += f"📝 Комментарий: {description}\n"
+        if safe_description:
+            text += f"📝 Комментарий: {safe_description}\n"
         text += (
             f"📍 Геолокация: получена ✅\n\n"
             "Подтверждаете? 👇"
