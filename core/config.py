@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     bot_token: str
     admin_ids: Annotated[List[int], NoDecode] = []
     dispatcher_group_id: int = 0
-    dispatch_mode: Literal["bot_only", "hybrid", "group_only"] = "bot_only"
+    dispatch_mode: Literal["bot_only", "hybrid", "group_only"] = "hybrid"
     video_channel_id: int = 0
 
     # ── Database ──────────────────────────────────────────────────

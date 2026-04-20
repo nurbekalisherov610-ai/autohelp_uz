@@ -66,7 +66,12 @@ class NotificationService:
             return list(dict.fromkeys(dispatcher_ids + admin_mirror_ids))
 
         # bot_only and hybrid keep action buttons in direct chats.
-        return list(dict.fromkeys(dispatcher_ids + admin_mirror_ids))
+        action_ids = list(dict.fromkeys(dispatcher_ids + admin_mirror_ids))
+
+        # Safety fallback: if staff routing is empty but group exists, use group.
+        if not action_ids and settings.dispatcher_group_id:
+            return [settings.dispatcher_group_id]
+        return action_ids
 
     async def _get_dispatcher_mirror_chat_ids(self) -> list[int]:
         """
@@ -272,12 +277,13 @@ class NotificationService:
             f"Boshqa usta tayinlang 👇"
         )
         try:
-            chat_ids = await self._get_dispatcher_action_chat_ids()
+            action_chat_ids = await self._get_dispatcher_action_chat_ids()
+            mirror_chat_ids = await self._get_dispatcher_mirror_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in chat_ids:
+        for chat_id in action_chat_ids:
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
@@ -288,6 +294,18 @@ class NotificationService:
             except Exception as e:
                 logger.error(
                     f"Failed to notify dispatcher destination {chat_id} about rejection: {e}"
+                )
+
+        for chat_id in mirror_chat_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to mirror rejection notification to {chat_id}: {e}"
                 )
 
     async def notify_dispatcher_awaiting_confirm(
@@ -301,12 +319,13 @@ class NotificationService:
             f"Tasdiqlang yoki summani o'zgartiring 👇"
         )
         try:
-            chat_ids = await self._get_dispatcher_action_chat_ids()
+            action_chat_ids = await self._get_dispatcher_action_chat_ids()
+            mirror_chat_ids = await self._get_dispatcher_mirror_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in chat_ids:
+        for chat_id in action_chat_ids:
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
@@ -317,6 +336,18 @@ class NotificationService:
             except Exception as e:
                 logger.error(
                     f"Failed to notify dispatcher destination {chat_id} about completion: {e}"
+                )
+
+        for chat_id in mirror_chat_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to mirror awaiting-confirm notification to {chat_id}: {e}"
                 )
 
     async def send_sla_alert(self, order: Order, alert_key: str) -> None:
