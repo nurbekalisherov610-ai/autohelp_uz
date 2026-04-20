@@ -18,6 +18,8 @@ from locales.texts import t
 from core.config import settings
 from models.order import OrderStatus, PROBLEM_LABELS
 from models.master_specialization import (
+    MasterSpecializationType,
+    normalize_specialization,
     problem_specialization_priority,
     specialization_short_text,
 )
@@ -29,6 +31,39 @@ from repositories.master_repo import MasterRepo
 from repositories.stats_repo import StatsRepo
 
 router = Router(name="dispatcher")
+
+
+async def _render_master_picker(
+    callback: CallbackQuery,
+    state: FSMContext,
+    order_uid: str,
+    masters: list,
+    master_repo: MasterRepo,
+    preferred: list[MasterSpecializationType] | None = None,
+    title: str | None = None,
+):
+    """Render assignment keyboard with specialization hints."""
+    if not masters:
+        await callback.message.edit_text(
+            f"⚠️ Buyurtma <code>{order_uid}</code> uchun mos usta topilmadi.\n"
+            f"Filtrni o'zgartiring yoki qayta urinib ko'ring.",
+            parse_mode="HTML",
+        )
+        return
+
+    spec_map = await master_repo.get_specializations_map([m.id for m in masters])
+    await state.update_data(assigning_order_uid=order_uid, search_order_uid=order_uid)
+
+    await callback.message.edit_text(
+        title or f"👨‍🔧 Buyurtma <code>{order_uid}</code> uchun usta tanlang:",
+        parse_mode="HTML",
+        reply_markup=master_selection_keyboard(
+            masters,
+            order_uid,
+            specialization_map=spec_map,
+            preferred_specializations=preferred or [],
+        ),
+    )
 
 
 # ── Dispatcher /start and main menu ──────────────────────────────
@@ -224,29 +259,170 @@ async def start_assign_master(
 
     master_repo = MasterRepo(session)
     masters = await master_repo.get_available_masters_for_problem(order.problem_type)
-    spec_map = await master_repo.get_specializations_map([m.id for m in masters])
     preferred = problem_specialization_priority(order.problem_type.value)
 
-    if not masters:
-        await callback.answer(
-            "Hozirda mos online/bo'sh usta topilmadi!",
-            show_alert=True,
+    await _render_master_picker(
+        callback=callback,
+        state=state,
+        order_uid=order_uid,
+        masters=masters,
+        master_repo=master_repo,
+        preferred=preferred,
+        title=(
+            f"👨‍🔧 Buyurtma <code>{order_uid}</code> uchun usta tanlang:\n"
+            f"Filtr yoki qidiruvdan foydalaning."
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_filter:"),
+)
+async def filter_masters_for_order(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+):
+    """Quick-filter masters by specialization tag."""
+    _, order_uid, spec_token = callback.data.split(":", 2)
+
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await callback.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+
+    selected_spec = normalize_specialization(spec_token)
+    if not selected_spec:
+        await callback.answer("Filtr topilmadi", show_alert=True)
+        return
+
+    master_repo = MasterRepo(session)
+    masters = await master_repo.get_available_masters_for_problem(order.problem_type)
+    spec_map = await master_repo.get_specializations_map([m.id for m in masters])
+
+    filtered = []
+    for master in masters:
+        specs = spec_map.get(master.id, [MasterSpecializationType.UNIVERSAL])
+        if selected_spec == MasterSpecializationType.UNIVERSAL:
+            if MasterSpecializationType.UNIVERSAL in specs:
+                filtered.append(master)
+        elif (
+            selected_spec in specs
+            or MasterSpecializationType.UNIVERSAL in specs
+        ):
+            filtered.append(master)
+
+    preferred = (
+        [MasterSpecializationType.UNIVERSAL]
+        if selected_spec == MasterSpecializationType.UNIVERSAL
+        else [selected_spec, MasterSpecializationType.UNIVERSAL]
+    )
+
+    await _render_master_picker(
+        callback=callback,
+        state=state,
+        order_uid=order_uid,
+        masters=filtered,
+        master_repo=master_repo,
+        preferred=preferred,
+        title=(
+            f"🧩 Filtr: <b>{selected_spec.value.upper()}</b>\n"
+            f"Buyurtma <code>{order_uid}</code> uchun mos usta:"
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_search_master:"),
+)
+async def start_master_search(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    """Ask dispatcher to enter search text for master lookup."""
+    order_uid = callback.data.split(":")[1]
+    await state.update_data(search_order_uid=order_uid, assigning_order_uid=order_uid)
+    await state.set_state(DispatcherOrderStates.searching_master)
+    await callback.message.edit_text(
+        f"🔎 Usta qidirish\n"
+        f"Buyurtma: <code>{order_uid}</code>\n\n"
+        f"Ism, telefon yoki Telegram ID yuboring.\n"
+        f"Masalan: <code>Ali</code> yoki <code>99890</code>",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    DispatcherOrderStates.searching_master,
+    F.text,
+)
+async def process_master_search(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+):
+    """Filter master list by text query and render assignment keyboard."""
+    data = await state.get_data()
+    order_uid = data.get("search_order_uid")
+    if not order_uid:
+        await state.clear()
+        await message.answer("Buyurtma aniqlanmadi. Qaytadan urinib ko'ring.")
+        return
+
+    query = (message.text or "").strip().lower()
+    if not query:
+        await message.answer("Qidiruv matnini yuboring.")
+        return
+
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await state.clear()
+        await message.answer("Buyurtma topilmadi.")
+        return
+
+    master_repo = MasterRepo(session)
+    masters = await master_repo.get_available_masters_for_problem(order.problem_type)
+    spec_map = await master_repo.get_specializations_map([m.id for m in masters])
+
+    matched = []
+    for master in masters:
+        haystack = " ".join(
+            [
+                master.full_name or "",
+                master.phone or "",
+                str(master.telegram_id),
+            ]
+        ).lower()
+        if query in haystack:
+            matched.append(master)
+
+    if not matched:
+        await message.answer(
+            "Hech narsa topilmadi. Boshqa so'z kiriting yoki 'Hammasi' tugmasini bosing."
         )
         return
 
-    await state.update_data(assigning_order_uid=order_uid)
-
-    await callback.message.edit_text(
-        f"👨‍🔧 Buyurtma <code>{order_uid}</code> uchun usta tanlang:",
+    await state.clear()
+    preferred = problem_specialization_priority(order.problem_type.value)
+    await message.answer(
+        f"🔎 Topildi: <b>{len(matched)}</b> ta usta\n"
+        f"Buyurtma <code>{order_uid}</code> uchun tanlang:",
         parse_mode="HTML",
         reply_markup=master_selection_keyboard(
-            masters,
+            matched,
             order_uid,
             specialization_map=spec_map,
             preferred_specializations=preferred,
         ),
     )
-    await callback.answer()
 
 
 @router.callback_query(
@@ -297,7 +473,7 @@ async def assign_master_to_order(
     await state.set_state(DispatcherOrderStates.recording_video)
 
     await callback.message.answer(
-        "Video yuborilgandan keyin usta xabardor qilinadi.",
+        "Majburiy bosqich: video yuborilgandan keyingina usta xabardor qilinadi.",
     )
 
     await callback.answer()
@@ -362,7 +538,7 @@ async def auto_assign_master(
     await state.set_state(DispatcherOrderStates.recording_video)
 
     await callback.message.answer(
-        "Video yuborilgandan keyin usta xabardor qilinadi.",
+        "Majburiy bosqich: video yuborilgandan keyingina usta xabardor qilinadi.",
     )
 
     await callback.answer()

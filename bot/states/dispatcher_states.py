@@ -9,6 +9,7 @@ class DispatcherOrderStates(StatesGroup):
     """Dispatcher order management states."""
     viewing_order = State()
     selecting_master = State()
+    searching_master = State()
     recording_video = State()
     editing_amount = State()
 

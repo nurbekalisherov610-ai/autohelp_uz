@@ -11,6 +11,50 @@ from models.master_specialization import (
 )
 
 
+def _master_filter_rows(order_uid: str) -> list[list[InlineKeyboardButton]]:
+    """Quick filter/search controls for master assignment."""
+    return [
+        [
+            InlineKeyboardButton(
+                text="🔎 Usta qidirish",
+                callback_data=f"dispatch_search_master:{order_uid}",
+            ),
+            InlineKeyboardButton(
+                text="🔄 Hammasi",
+                callback_data=f"dispatch_assign:{order_uid}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="AKB",
+                callback_data=f"dispatch_filter:{order_uid}:battery",
+            ),
+            InlineKeyboardButton(
+                text="TIRE",
+                callback_data=f"dispatch_filter:{order_uid}:tire",
+            ),
+            InlineKeyboardButton(
+                text="ELEC",
+                callback_data=f"dispatch_filter:{order_uid}:electrical",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="ENG",
+                callback_data=f"dispatch_filter:{order_uid}:engine",
+            ),
+            InlineKeyboardButton(
+                text="BRK",
+                callback_data=f"dispatch_filter:{order_uid}:brake",
+            ),
+            InlineKeyboardButton(
+                text="ALL",
+                callback_data=f"dispatch_filter:{order_uid}:universal",
+            ),
+        ],
+    ]
+
+
 def master_selection_keyboard(
     masters: list[Master],
     order_uid: str,
@@ -43,6 +87,7 @@ def master_selection_keyboard(
         text="🤖 Tizim taklifi (eng yaqin/bo'sh usta)",
         callback_data=f"assign_auto:{order_uid}"
     )])
+    buttons[1:1] = _master_filter_rows(order_uid)
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
