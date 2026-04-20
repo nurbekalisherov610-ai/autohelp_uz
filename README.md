@@ -176,7 +176,8 @@ python manage.py stats
 |----------|-----------|---------|
 | `BOT_TOKEN` | Telegram Bot API token | required |
 | `ADMIN_IDS` | Comma-separated admin Telegram IDs | required |
-| `DISPATCHER_GROUP_ID` | Telegram group for dispatchers | required |
+| `DISPATCHER_GROUP_ID` | Telegram group chat ID (optional, for hybrid/group mode) | 0 |
+| `DISPATCH_MODE` | Dispatch routing mode: `bot_only` / `hybrid` / `group_only` | bot_only |
 | `VIDEO_CHANNEL_ID` | Channel for video confirmations | required |
 | `DB_HOST` | PostgreSQL host | localhost |
 | `DB_PORT` | PostgreSQL port | 5432 |
@@ -188,6 +189,8 @@ python manage.py stats
 | `SLA_ASSIGN_TIMEOUT` | Minutes before assignment alert | 5 |
 | `SLA_ON_THE_WAY_TIMEOUT` | Minutes before travel alert | 60 |
 | `SLA_CONFIRM_TIMEOUT` | Minutes before confirmation alert | 15 |
+
+Recommended for one dispatcher: set `DISPATCH_MODE=bot_only`.
 
 ---
 

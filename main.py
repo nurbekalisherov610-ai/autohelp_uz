@@ -325,6 +325,7 @@ async def main():
         logger.info(f"Database string: {safe_db_url[:15]}...")
         
     logger.info(f"Redis: {'configured' if settings.use_redis else 'memory mode'}")
+    logger.info(f"Dispatch mode: {settings.dispatch_mode}")
     logger.info("=" * 50)
 
     # Create bot instance

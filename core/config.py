@@ -5,7 +5,7 @@ Loads all settings from environment variables with validation.
 import json
 import re
 from pathlib import Path
-from typing import Annotated, List
+from typing import Annotated, List, Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     bot_token: str
     admin_ids: Annotated[List[int], NoDecode] = []
     dispatcher_group_id: int = 0
+    dispatch_mode: Literal["bot_only", "hybrid", "group_only"] = "bot_only"
     video_channel_id: int = 0
 
     # ── Database ──────────────────────────────────────────────────
@@ -121,6 +122,25 @@ class Settings(BaseSettings):
             return [int(x) for x in re.findall(r"-?\d+", raw)]
 
         return value
+
+    @field_validator("dispatch_mode", mode="before")
+    @classmethod
+    def parse_dispatch_mode(cls, value):
+        """Normalize dispatch routing mode from env."""
+        if value is None:
+            return "bot_only"
+        raw = str(value).strip().lower()
+        aliases = {
+            "bot": "bot_only",
+            "direct": "bot_only",
+            "private": "bot_only",
+            "bot_only": "bot_only",
+            "hybrid": "hybrid",
+            "mixed": "hybrid",
+            "group": "group_only",
+            "group_only": "group_only",
+        }
+        return aliases.get(raw, raw)
 
     @property
     def get_database_url(self) -> str:

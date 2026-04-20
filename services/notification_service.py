@@ -29,38 +29,54 @@ class NotificationService:
         self.bot = bot
         self.session = session
 
-    async def _get_dispatcher_chat_ids(self) -> list[int]:
-        """
-        Resolve dispatcher notification destinations.
-        - Multi-dispatcher mode: use group chat (if configured).
-        - Single-dispatcher mode: send direct to dispatcher + admin mirror.
-        - If no group configured: direct dispatcher chats.
-        """
+    async def _get_dispatcher_user_ids(self) -> list[int]:
+        """Resolve active dispatcher Telegram user IDs."""
         result = await self.session.scalars(
             select(Staff.telegram_id).where(
                 Staff.role == StaffRole.DISPATCHER,
                 Staff.is_active == True,
             )
         )
-        dispatcher_ids = [int(x) for x in result.all()]
-        dispatcher_ids = list(dict.fromkeys(dispatcher_ids))
+        return list(dict.fromkeys(int(x) for x in result.all()))
 
-        # If no group configured, direct mode only.
-        if not settings.dispatcher_group_id:
-            return dispatcher_ids
+    @staticmethod
+    def _admin_mirror_ids(dispatcher_ids: list[int]) -> list[int]:
+        """Admins can receive mirrored operational notifications."""
+        return [
+            int(admin_id)
+            for admin_id in settings.admin_ids
+            if int(admin_id) not in dispatcher_ids
+        ]
 
-        # One dispatcher: direct handling is faster/reliable, plus admin mirror.
-        if len(dispatcher_ids) <= 1:
-            admin_mirror_ids = [
-                int(admin_id)
-                for admin_id in settings.admin_ids
-                if int(admin_id) not in dispatcher_ids
-            ]
-            merged = dispatcher_ids + admin_mirror_ids + [settings.dispatcher_group_id]
-            return list(dict.fromkeys(merged))
+    async def _get_dispatcher_action_chat_ids(self) -> list[int]:
+        """
+        Destinations for interactive dispatch actions (buttons).
+        Modes:
+        - bot_only: dispatchers + admin mirrors (private chats)
+        - hybrid: dispatchers + admin mirrors (private chats)
+        - group_only: group chat only
+        """
+        dispatcher_ids = await self._get_dispatcher_user_ids()
+        admin_mirror_ids = self._admin_mirror_ids(dispatcher_ids)
 
-        # Multiple dispatchers: group mode to avoid duplicate button actions.
-        return [settings.dispatcher_group_id]
+        if settings.dispatch_mode == "group_only":
+            if settings.dispatcher_group_id:
+                return [settings.dispatcher_group_id]
+            # Safe fallback if group is not configured.
+            return list(dict.fromkeys(dispatcher_ids + admin_mirror_ids))
+
+        # bot_only and hybrid keep action buttons in direct chats.
+        return list(dict.fromkeys(dispatcher_ids + admin_mirror_ids))
+
+    async def _get_dispatcher_mirror_chat_ids(self) -> list[int]:
+        """
+        Optional non-interactive mirror destinations.
+        - hybrid: mirror to group if configured
+        - bot_only/group_only: no extra mirror
+        """
+        if settings.dispatch_mode == "hybrid" and settings.dispatcher_group_id:
+            return [settings.dispatcher_group_id]
+        return []
 
     async def notify_dispatchers_new_order(
         self, order: Order, user: User
@@ -82,19 +98,20 @@ class NotificationService:
         )
 
         try:
-            chat_ids = await self._get_dispatcher_chat_ids()
+            action_chat_ids = await self._get_dispatcher_action_chat_ids()
+            mirror_chat_ids = await self._get_dispatcher_mirror_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        if not chat_ids:
+        if not action_chat_ids and not mirror_chat_ids:
             logger.warning(
                 f"No dispatcher destination configured; order {order.order_uid} was not broadcast."
             )
             return
 
         sent = 0
-        for chat_id in chat_ids:
+        for chat_id in action_chat_ids:
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
@@ -116,8 +133,28 @@ class NotificationService:
                     f"Failed to notify dispatcher destination {chat_id} for order {order.order_uid}: {e}"
                 )
 
+        for chat_id in mirror_chat_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                await self.bot.send_location(
+                    chat_id=chat_id,
+                    latitude=order.latitude,
+                    longitude=order.longitude,
+                )
+                sent += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to mirror dispatcher notification to {chat_id} for order {order.order_uid}: {e}"
+                )
+
         logger.info(
-            f"Dispatch notification sent to {sent} destination(s) for order {order.order_uid}"
+            f"Dispatch notification sent to {sent} destination(s) for order {order.order_uid} "
+            f"(mode={settings.dispatch_mode})"
         )
 
     async def notify_master_new_assignment(
@@ -235,7 +272,7 @@ class NotificationService:
             f"Boshqa usta tayinlang 👇"
         )
         try:
-            chat_ids = await self._get_dispatcher_chat_ids()
+            chat_ids = await self._get_dispatcher_action_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
@@ -264,7 +301,7 @@ class NotificationService:
             f"Tasdiqlang yoki summani o'zgartiring 👇"
         )
         try:
-            chat_ids = await self._get_dispatcher_chat_ids()
+            chat_ids = await self._get_dispatcher_action_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
@@ -286,12 +323,13 @@ class NotificationService:
         """Send SLA violation alert to dispatchers."""
         text = t(alert_key, lang="uz", order_uid=order.order_uid)
         try:
-            chat_ids = await self._get_dispatcher_chat_ids()
+            action_chat_ids = await self._get_dispatcher_action_chat_ids()
+            mirror_chat_ids = await self._get_dispatcher_mirror_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in chat_ids:
+        for chat_id in action_chat_ids + mirror_chat_ids:
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
@@ -331,12 +369,13 @@ class NotificationService:
         )
 
         try:
-            chat_ids = await self._get_dispatcher_chat_ids()
+            action_chat_ids = await self._get_dispatcher_action_chat_ids()
+            mirror_chat_ids = await self._get_dispatcher_mirror_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        for chat_id in chat_ids:
+        for chat_id in action_chat_ids + mirror_chat_ids:
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
