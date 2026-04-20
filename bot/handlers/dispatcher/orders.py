@@ -640,6 +640,52 @@ async def auto_assign_master(
 
 # ── Dispatcher video confirmation ─────────────────────────────────
 
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_video:"),
+)
+async def start_dispatcher_video_from_card(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+):
+    """Start/restore dispatcher video confirmation step from order action card."""
+    order_uid = callback.data.split(":")[1]
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+
+    if not order:
+        await callback.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+    if order.status != OrderStatus.ASSIGNED:
+        await callback.answer("Avval buyurtmaga usta tayinlang.", show_alert=True)
+        return
+    if order.dispatcher_video_file_id:
+        await callback.answer("Bu buyurtma uchun video allaqachon yuborilgan.", show_alert=True)
+        return
+
+    await state.update_data(video_order_uid=order_uid, assigned_master_id=order.master_id)
+    await state.set_state(DispatcherOrderStates.recording_video)
+
+    await callback.message.answer(
+        _dispatcher_video_prompt_text(order_uid),
+        parse_mode="HTML",
+    )
+
+    chat = callback.message.chat if callback.message else None
+    if chat and chat.id != callback.from_user.id:
+        try:
+            await bot.send_message(
+                callback.from_user.id,
+                _dispatcher_video_prompt_text(order_uid),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+    await callback.answer("Video xabarni yuboring.")
+
 @router.message(
     DispatcherOrderStates.recording_video,
     F.video_note,

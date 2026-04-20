@@ -115,6 +115,12 @@ def dispatcher_order_actions(order_uid: str) -> InlineKeyboardMarkup:
                 callback_data=f"dispatch_call:{order_uid}"
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text="🎥 Video tasdiq",
+                callback_data=f"dispatch_video:{order_uid}"
+            ),
+        ],
     ])
 
 
