@@ -201,6 +201,7 @@ python manage.py stats
 | `SLA_ASSIGN_TIMEOUT` | Minutes before assignment alert | 5 |
 | `SLA_ON_THE_WAY_TIMEOUT` | Minutes before travel alert | 60 |
 | `SLA_CONFIRM_TIMEOUT` | Minutes before confirmation alert | 15 |
+| `SLA_ALERT_COOLDOWN_MINUTES` | Minimum minutes between repeated SLA alerts for the same order | 30 |
 
 Recommended for one dispatcher with group backup: set `DISPATCH_MODE=hybrid`.
 

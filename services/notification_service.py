@@ -3,6 +3,7 @@ AutoHelp.uz - Notification Service
 Handles sending notifications to clients, dispatchers, and masters.
 """
 import asyncio
+import time
 from html import escape
 
 from aiogram import Bot
@@ -21,14 +22,62 @@ from bot.keyboards.dispatcher_kb import (
 )
 from bot.keyboards.master_kb import master_order_response, master_status_update_keyboard
 from core.config import settings
+from core.redis import get_redis
 
 
 class NotificationService:
     """Handles all notification logic for the bot."""
+    _sla_alert_local_cache: dict[str, float] = {}
 
     def __init__(self, bot: Bot, session: AsyncSession):
         self.bot = bot
         self.session = session
+
+    async def _should_send_sla_alert(
+        self,
+        order_uid: str,
+        alert_key: str,
+    ) -> bool:
+        """
+        Throttle repeated SLA alerts for the same order and alert type.
+        Redis is primary storage; in-memory fallback is used if Redis fails.
+        """
+        cooldown_seconds = max(60, settings.sla_alert_cooldown_minutes * 60)
+        cache_key = f"sla_alert:{alert_key}:{order_uid}"
+
+        if settings.use_redis:
+            try:
+                redis = await get_redis()
+                was_set = await redis.set(
+                    cache_key,
+                    "1",
+                    ex=cooldown_seconds,
+                    nx=True,
+                )
+                return bool(was_set)
+            except Exception as e:
+                logger.warning(
+                    f"SLA alert redis throttle failed, using memory fallback for {order_uid}: {e}"
+                )
+
+        now = time.monotonic()
+        expires_at = self._sla_alert_local_cache.get(cache_key, 0.0)
+        if expires_at > now:
+            return False
+
+        self._sla_alert_local_cache[cache_key] = now + cooldown_seconds
+
+        # Keep memory fallback map bounded.
+        if len(self._sla_alert_local_cache) > 2000:
+            stale_keys = [
+                key
+                for key, value in self._sla_alert_local_cache.items()
+                if value <= now
+            ]
+            for key in stale_keys:
+                self._sla_alert_local_cache.pop(key, None)
+
+        return True
 
     async def _send_order_notification_packet(
         self,
@@ -409,7 +458,6 @@ class NotificationService:
 
     async def send_sla_alert(self, order: Order, alert_key: str) -> None:
         """Send SLA violation alert to dispatchers."""
-        text = t(alert_key, lang="uz", order_uid=order.order_uid)
         try:
             action_chat_ids = await self._get_dispatcher_action_chat_ids()
             mirror_chat_ids = await self._get_dispatcher_mirror_chat_ids()
@@ -417,13 +465,24 @@ class NotificationService:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
             return
 
-        destination_ids = action_chat_ids + mirror_chat_ids
+        destination_ids = list(dict.fromkeys(action_chat_ids + mirror_chat_ids))
         if not destination_ids:
             logger.warning(
                 f"No dispatcher destination configured for SLA alert on order {order.order_uid}."
             )
             return
 
+        should_send = await self._should_send_sla_alert(
+            order_uid=order.order_uid,
+            alert_key=alert_key,
+        )
+        if not should_send:
+            logger.debug(
+                f"SLA alert suppressed by cooldown for {order.order_uid} ({alert_key})."
+            )
+            return
+
+        text = t(alert_key, lang="uz", order_uid=order.order_uid)
         tasks = [
             self._send_html_message(chat_id=chat_id, text=text)
             for chat_id in destination_ids

@@ -249,16 +249,16 @@ TEXTS = {
         "ru": "✅ Заявке #{order_uid} назначен мастер: {master_name}",
     },
     "sla_alert_assign": {
-        "uz": "⚠️ OGOHLANTIRISH: Buyurtma #{order_uid} 5 daqiqadan beri qabul qilinmadi!",
-        "ru": "⚠️ ВНИМАНИЕ: Заявка #{order_uid} не принята более 5 минут!",
+        "uz": "⏰ Eslatma: Buyurtma #{order_uid} 5+ daqiqadan beri qabul qilinmagan.",
+        "ru": "⏰ Напоминание: заявка #{order_uid} не принята более 5 минут.",
     },
     "sla_alert_on_the_way": {
-        "uz": "⚠️ OGOHLANTIRISH: Buyurtma #{order_uid} — usta 60 daqiqadan beri yo'lda!",
-        "ru": "⚠️ ВНИМАНИЕ: Заявка #{order_uid} — мастер в пути более 60 минут!",
+        "uz": "⏰ Eslatma: Buyurtma #{order_uid} bo'yicha usta 60+ daqiqadan beri yo'lda.",
+        "ru": "⏰ Напоминание: по заявке #{order_uid} мастер в пути более 60 минут.",
     },
     "sla_alert_confirm": {
-        "uz": "⚠️ OGOHLANTIRISH: Buyurtma #{order_uid} 15 daqiqadan beri tasdiqlanmagan!",
-        "ru": "⚠️ ВНИМАНИЕ: Заявка #{order_uid} не подтверждена более 15 минут!",
+        "uz": "⏰ Eslatma: Buyurtma #{order_uid} 15+ daqiqadan beri tasdiqlanmagan.",
+        "ru": "⏰ Напоминание: заявка #{order_uid} не подтверждена более 15 минут.",
     },
 
     # ── Master ────────────────────────────────────────────────────
