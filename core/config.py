@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     dispatcher_group_id: int = 0
     dispatch_mode: Literal["bot_only", "hybrid", "group_only"] = "bot_only"
     video_channel_id: int = 0
+    dispatcher_confirm_video_uz: str = ""
+    dispatcher_confirm_video_ru: str = ""
+    dispatcher_confirm_video_kind: Literal["video_note", "video"] = "video_note"
 
     # ── Database ──────────────────────────────────────────────────
     database_url: str = ""  # If provided (e.g. by Railway), overrides individual fields
@@ -149,6 +152,22 @@ class Settings(BaseSettings):
             "mixed": "hybrid",
             "group": "group_only",
             "group_only": "group_only",
+        }
+        return aliases.get(raw, raw)
+
+    @field_validator("dispatcher_confirm_video_kind", mode="before")
+    @classmethod
+    def parse_dispatcher_confirm_video_kind(cls, value):
+        """Normalize dispatcher auto-confirm media type from env."""
+        if value is None:
+            return "video_note"
+        raw = str(value).strip().lower()
+        aliases = {
+            "video_note": "video_note",
+            "videonote": "video_note",
+            "note": "video_note",
+            "circle": "video_note",
+            "video": "video",
         }
         return aliases.get(raw, raw)
 
