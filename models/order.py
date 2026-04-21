@@ -41,8 +41,8 @@ class ProblemType(str, enum.Enum):
 
 # Human-readable labels
 PROBLEM_LABELS = {
-    ProblemType.ENGINE_NO_START: {"uz": "🔋 Zavod bo'lmayapti", "ru": "🔋 Не заводится"},
-    ProblemType.BATTERY_DEAD: {"uz": "🔌 Akkumulyator o'tirgan", "ru": "🔌 Сел аккумулятор"},
+    ProblemType.ENGINE_NO_START: {"uz": "🔋 Zavodit bolmayapti", "ru": "🔋 Не заводится"},
+    ProblemType.BATTERY_DEAD: {"uz": "🔌 Akumulyator o'tirgan", "ru": "🔌 Сел аккумулятор"},
     ProblemType.TIRE_BURST: {"uz": "🛞 Balon yorilgan", "ru": "🛞 Лопнуло колесо"},
     ProblemType.ENGINE_PROBLEM: {"uz": "🔧 Dvigatel muammosi", "ru": "🔧 Проблема с двигателем"},
     ProblemType.BRAKE_PROBLEM: {"uz": "🛑 Tormoz muammosi", "ru": "🛑 Проблема с тормозами"},
