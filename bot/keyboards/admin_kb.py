@@ -55,6 +55,91 @@ def admin_orders_filter() -> InlineKeyboardMarkup:
     ])
 
 
+def _admin_orders_navigation_row(
+    *,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+    refresh_callback: str,
+    prev_callback: str,
+    next_callback: str,
+) -> list[InlineKeyboardButton]:
+    """Build a compact prev/refresh/next row for orders lists."""
+    nav_row: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav_row.append(InlineKeyboardButton(text="◀️ Oldingi", callback_data=prev_callback))
+    nav_row.append(InlineKeyboardButton(text="🔄 Yangilash", callback_data=refresh_callback))
+    if has_next:
+        nav_row.append(InlineKeyboardButton(text="Keyingi ▶️", callback_data=next_callback))
+    return nav_row
+
+
+def admin_active_orders_keyboard(
+    order_uids: list[str],
+    *,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
+    """Keyboard for active orders list with direct management entry points."""
+    rows: list[list[InlineKeyboardButton]] = []
+
+    for uid in order_uids:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🧾 {uid}",
+                callback_data=f"dispatch_view:{uid}",
+            )
+        ])
+
+    rows.append(
+        _admin_orders_navigation_row(
+            page=page,
+            has_prev=has_prev,
+            has_next=has_next,
+            refresh_callback=f"admin:active_orders:{page}",
+            prev_callback=f"admin:active_orders:{page - 1}",
+            next_callback=f"admin:active_orders:{page + 1}",
+        )
+    )
+    rows.append([InlineKeyboardButton(text="🔙 Admin menyu", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_filtered_orders_keyboard(
+    order_uids: list[str],
+    *,
+    filter_type: str,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
+    """Keyboard for filtered orders list with direct management entry points."""
+    rows: list[list[InlineKeyboardButton]] = []
+
+    for uid in order_uids:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🧾 {uid}",
+                callback_data=f"dispatch_view:{uid}",
+            )
+        ])
+
+    rows.append(
+        _admin_orders_navigation_row(
+            page=page,
+            has_prev=has_prev,
+            has_next=has_next,
+            refresh_callback=f"admin_filter:{filter_type}:{page}",
+            prev_callback=f"admin_filter:{filter_type}:{page - 1}",
+            next_callback=f"admin_filter:{filter_type}:{page + 1}",
+        )
+    )
+    rows.append([InlineKeyboardButton(text="🔙 Filtrlarga qaytish", callback_data="admin:orders")])
+    rows.append([InlineKeyboardButton(text="🔙 Admin menyu", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def admin_master_actions(master_id: int) -> InlineKeyboardMarkup:
     """Actions for a specific master."""
     return InlineKeyboardMarkup(inline_keyboard=[

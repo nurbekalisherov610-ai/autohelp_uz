@@ -22,6 +22,7 @@ from bot.filters.role_filter import _get_admin_ids
 from bot.keyboards.admin_kb import (
     admin_main_menu, admin_orders_filter, admin_master_actions,
     admin_export_options, admin_reports_period, admin_back_button,
+    admin_active_orders_keyboard, admin_filtered_orders_keyboard,
 )
 from models.order import Order, OrderStatus, PROBLEM_LABELS
 from models.master import Master
@@ -40,12 +41,23 @@ STATUS_EMOJI = {
     "on_the_way": "🚗", "arrived": "📍", "in_progress": "🔧",
     "awaiting_confirm": "⏳", "completed": "✅", "cancelled": "❌", "rejected": "🔄",
 }
+ADMIN_ORDERS_PAGE_SIZE = 8
 
 
 def _safe_pct(part, total) -> str:
     if not total:
         return "0.0"
     return f"{part / total * 100:.1f}"
+
+
+def _parse_page(parts: list[str], default: int = 0) -> int:
+    """Parse non-negative page index from callback data parts."""
+    if len(parts) < 3:
+        return default
+    try:
+        return max(0, int(parts[2]))
+    except (TypeError, ValueError):
+        return default
 
 
 async def _edit_or_send(callback: CallbackQuery, text: str, **kwargs):
@@ -169,51 +181,80 @@ async def admin_dashboard(callback: CallbackQuery, session: AsyncSession):
 
 # ── Active Orders ─────────────────────────────────────────────────
 
-@router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:active_orders")
+@router.callback_query(
+    RoleFilter("admin", "super_admin", "dispatcher"),
+    F.data.startswith("admin:active_orders"),
+)
 async def admin_active_orders(callback: CallbackQuery, session: AsyncSession):
-    """Show all currently active orders."""
-    await callback.answer("📋 Yuklanmoqda...")
+    """Show active orders with direct open/manage actions and paging."""
+    await callback.answer("Yuklanmoqda...")
+
+    parts = (callback.data or "").split(":")
+    page = _parse_page(parts, default=0)
+    offset = page * ADMIN_ORDERS_PAGE_SIZE
+
+    total = (
+        await session.scalar(
+            select(func.count(Order.id)).where(
+                Order.status.notin_([OrderStatus.COMPLETED, OrderStatus.CANCELLED])
+            )
+        )
+    ) or 0
+
+    if total == 0:
+        await _edit_or_send(
+            callback,
+            "Hozirda faol buyurtmalar yo'q.",
+            reply_markup=admin_back_button(),
+        )
+        return
+
+    if offset >= total:
+        page = 0
+        offset = 0
 
     result = await session.scalars(
         select(Order)
         .where(Order.status.notin_([OrderStatus.COMPLETED, OrderStatus.CANCELLED]))
         .options(selectinload(Order.user), selectinload(Order.master))
         .order_by(Order.created_at.desc())
-        .limit(20)
+        .offset(offset)
+        .limit(ADMIN_ORDERS_PAGE_SIZE)
     )
     orders = list(result.all())
 
-    if not orders:
-        await _edit_or_send(callback, 
-            "✅ Hozirda faol buyurtmalar yo'q.",
-            reply_markup=admin_back_button(),
-        )
-        return
-
-    lines = [f"⚡ <b>Faol buyurtmalar ({len(orders)}):</b>\n"]
-    for order in orders:
-        icon = STATUS_EMOJI.get(order.status.value, "•")
-        client = escape(order.user.full_name) if order.user else "—"
+    lines = [
+        "<b>Faol buyurtmalar</b>",
+        f"Jami: <b>{total}</b> ta",
+        f"Sahifa: <b>{page + 1}</b>/{max(1, (total + ADMIN_ORDERS_PAGE_SIZE - 1) // ADMIN_ORDERS_PAGE_SIZE)}",
+        "",
+    ]
+    for idx, order in enumerate(orders, start=offset + 1):
+        icon = STATUS_EMOJI.get(order.status.value, "-")
+        client = escape(order.user.full_name) if order.user else "-"
         master = escape(order.master.full_name) if order.master else "Tayinlanmagan"
         problem = PROBLEM_LABELS[order.problem_type]["uz"]
         elapsed = int((datetime.utcnow() - order.created_at.replace(tzinfo=None)).total_seconds() / 60)
 
         lines.append(
-            f"{icon} <code>{order.order_uid}</code>\n"
-            f"   👤 {client} → 👨‍🔧 {master}\n"
-            f"   🔧 {problem} • ⏱ {elapsed} daq\n"
+            f"{idx}. {icon} <code>{order.order_uid}</code>\n"
+            f"   Mijoz: {client} -> Usta: {master}\n"
+            f"   {problem} | {elapsed} daq\n"
         )
 
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3900] + "\n...(hammasi Excel'da)"
+    lines.append("Boshqarish uchun pastdagi tugmalardan buyurtmani tanlang.")
 
-    await _edit_or_send(callback, 
-        text, parse_mode="HTML", reply_markup=admin_back_button()
+    await _edit_or_send(
+        callback,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=admin_active_orders_keyboard(
+            [o.order_uid for o in orders],
+            page=page,
+            has_prev=page > 0,
+            has_next=(offset + len(orders)) < total,
+        ),
     )
-
-
-# ── Orders by filter ──────────────────────────────────────────────
 
 @router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:orders")
 async def admin_orders_menu(callback: CallbackQuery):
@@ -230,66 +271,94 @@ async def admin_orders_menu(callback: CallbackQuery):
     F.data.startswith("admin_filter:"),
 )
 async def admin_filter_orders(callback: CallbackQuery, session: AsyncSession):
-    """Filter orders by status."""
-    await callback.answer("🔄 Yuklanmoqda...")
-    filter_type = callback.data.split(":")[1]
+    """Filter orders by status with paging and direct management actions."""
+    await callback.answer("Yuklanmoqda...")
 
-    query = (
-        select(Order)
-        .options(selectinload(Order.user), selectinload(Order.master))
-        .order_by(Order.created_at.desc())
-        .limit(25)
-    )
+    parts = (callback.data or "").split(":")
+    filter_type = parts[1] if len(parts) > 1 else "all"
+    page = _parse_page(parts, default=0)
+    offset = page * ADMIN_ORDERS_PAGE_SIZE
 
     filter_labels = {
-        "new": "🆕 Yangi", "active": "⚡ Faol", "completed": "✅ Tugallangan",
-        "cancelled": "❌ Bekor", "all": "📋 Barchasi",
+        "new": "Yangi", "active": "Faol", "completed": "Tugallangan",
+        "cancelled": "Bekor", "all": "Barchasi",
     }
 
+    base_query = select(Order)
+    count_query = select(func.count(Order.id))
+
     if filter_type == "new":
-        query = query.where(Order.status == OrderStatus.NEW)
+        base_query = base_query.where(Order.status == OrderStatus.NEW)
+        count_query = count_query.where(Order.status == OrderStatus.NEW)
     elif filter_type == "active":
-        query = query.where(Order.status.notin_([OrderStatus.COMPLETED, OrderStatus.CANCELLED]))
+        active_filter = Order.status.notin_([OrderStatus.COMPLETED, OrderStatus.CANCELLED])
+        base_query = base_query.where(active_filter)
+        count_query = count_query.where(active_filter)
     elif filter_type == "completed":
-        query = query.where(Order.status == OrderStatus.COMPLETED)
+        base_query = base_query.where(Order.status == OrderStatus.COMPLETED)
+        count_query = count_query.where(Order.status == OrderStatus.COMPLETED)
     elif filter_type == "cancelled":
-        query = query.where(Order.status == OrderStatus.CANCELLED)
+        base_query = base_query.where(Order.status == OrderStatus.CANCELLED)
+        count_query = count_query.where(Order.status == OrderStatus.CANCELLED)
 
-    result = await session.scalars(query)
-    orders = list(result.all())
-
-    if not orders:
-        await _edit_or_send(callback, 
-            f"📭 {filter_labels.get(filter_type, filter_type)} buyurtmalar yo'q.",
+    total = (await session.scalar(count_query)) or 0
+    if total == 0:
+        await _edit_or_send(
+            callback,
+            f"{filter_labels.get(filter_type, filter_type)} buyurtmalar yo'q.",
             reply_markup=admin_back_button(),
         )
         return
 
-    lines = [f"📋 <b>{filter_labels.get(filter_type, filter_type)} ({len(orders)}):</b>\n"]
-    for order in orders:
-        icon = STATUS_EMOJI.get(order.status.value, "•")
-        client = escape(order.user.full_name) if order.user else "—"
-        master = escape(order.master.full_name) if order.master else "—"
+    if offset >= total:
+        page = 0
+        offset = 0
+
+    query = (
+        base_query
+        .options(selectinload(Order.user), selectinload(Order.master))
+        .order_by(Order.created_at.desc())
+        .offset(offset)
+        .limit(ADMIN_ORDERS_PAGE_SIZE)
+    )
+
+    result = await session.scalars(query)
+    orders = list(result.all())
+
+    lines = [
+        f"<b>{filter_labels.get(filter_type, filter_type)}</b>",
+        f"Jami: <b>{total}</b> ta",
+        f"Sahifa: <b>{page + 1}</b>/{max(1, (total + ADMIN_ORDERS_PAGE_SIZE - 1) // ADMIN_ORDERS_PAGE_SIZE)}",
+        "",
+    ]
+    for idx, order in enumerate(orders, start=offset + 1):
+        icon = STATUS_EMOJI.get(order.status.value, "-")
+        client = escape(order.user.full_name) if order.user else "-"
+        master = escape(order.master.full_name) if order.master else "-"
         problem = PROBLEM_LABELS[order.problem_type]["uz"]
-        amount = f"💰{order.payment_amount:,.0f}" if order.payment_amount else ""
+        amount = f"{order.payment_amount:,.0f}" if order.payment_amount else ""
         date = order.created_at.strftime("%d.%m %H:%M")
 
         lines.append(
-            f"{icon} <code>{order.order_uid}</code> {amount}\n"
-            f"   👤{client} | 👨‍🔧{master}\n"
-            f"   📌{problem} | {date}\n"
+            f"{idx}. {icon} <code>{order.order_uid}</code> {amount}\n"
+            f"   Mijoz: {client} | Usta: {master}\n"
+            f"   {problem} | {date}\n"
         )
 
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3900] + "\n...(davomi Excel'da)"
+    lines.append("Boshqarish uchun pastdagi tugmalardan buyurtmani tanlang.")
 
-    await _edit_or_send(callback, 
-        text, parse_mode="HTML", reply_markup=admin_back_button()
+    await _edit_or_send(
+        callback,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=admin_filtered_orders_keyboard(
+            [o.order_uid for o in orders],
+            filter_type=filter_type,
+            page=page,
+            has_prev=page > 0,
+            has_next=(offset + len(orders)) < total,
+        ),
     )
-
-
-# ── Reviews ───────────────────────────────────────────────────────
 
 @router.callback_query(RoleFilter("admin", "super_admin", "dispatcher"), F.data == "admin:reviews")
 async def admin_reviews(callback: CallbackQuery, session: AsyncSession):

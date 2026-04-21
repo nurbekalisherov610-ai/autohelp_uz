@@ -92,6 +92,9 @@ def master_selection_keyboard(
         [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")]
     )
     buttons.append(
+        [InlineKeyboardButton(text="📋 Faol buyurtmalar", callback_data="disp:active_orders")]
+    )
+    buttons.append(
         [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")]
     )
 
@@ -127,12 +130,8 @@ def dispatcher_order_actions(order_uid: str) -> InlineKeyboardMarkup:
                 callback_data=f"dispatch_video:{order_uid}"
             ),
         ],
-        [
-            InlineKeyboardButton(
-                text="🏠 Dispetcher menyusi",
-                callback_data="disp:menu"
-            ),
-        ],
+        [InlineKeyboardButton(text="📋 Faol buyurtmalar", callback_data="disp:active_orders")],
+        [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")],
     ])
 
 
@@ -161,6 +160,7 @@ def dispatcher_confirm_completion(order_uid: str) -> InlineKeyboardMarkup:
             ),
         ],
         [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")],
+        [InlineKeyboardButton(text="📋 Faol buyurtmalar", callback_data="disp:active_orders")],
         [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")],
     ])
 
@@ -170,6 +170,7 @@ def dispatcher_order_navigation(order_uid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")],
+            [InlineKeyboardButton(text="📋 Faol buyurtmalar", callback_data="disp:active_orders")],
             [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")],
         ]
     )
@@ -181,9 +182,55 @@ def dispatcher_video_prompt_keyboard(order_uid: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🎥 Video rejimini qayta ochish", callback_data=f"dispatch_video:{order_uid}")],
             [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")],
+            [InlineKeyboardButton(text="📋 Faol buyurtmalar", callback_data="disp:active_orders")],
             [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")],
         ]
     )
+
+
+def dispatcher_active_orders_keyboard(
+    order_uids: list[str],
+    *,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
+    """Keyboard with direct order-open actions from active orders list."""
+    rows: list[list[InlineKeyboardButton]] = []
+
+    for uid in order_uids:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🧾 {uid}",
+                callback_data=f"dispatch_view:{uid}",
+            )
+        ])
+
+    nav_row: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="◀️ Oldingi",
+                callback_data=f"disp:active_orders:{page - 1}",
+            )
+        )
+    nav_row.append(
+        InlineKeyboardButton(
+            text="🔄 Yangilash",
+            callback_data=f"disp:active_orders:{page}",
+        )
+    )
+    if has_next:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="Keyingi ▶️",
+                callback_data=f"disp:active_orders:{page + 1}",
+            )
+        )
+    rows.append(nav_row)
+
+    rows.append([InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def reassign_order_keyboard(order_uid: str) -> InlineKeyboardMarkup:

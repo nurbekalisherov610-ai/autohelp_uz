@@ -57,21 +57,38 @@ class OrderService:
         dispatcher_id: int | None = None,
         dispatcher_telegram_id: int | None = None,
     ):
-        """Assign a master to an order."""
+        """Assign or reassign a master to an active order."""
         # Check if master is available
         master = await self.master_repo.get_by_id(master_id)
         if not master:
             raise ValueError("Master not found")
 
-        active_order = await self.order_repo.get_active_by_master(master_id)
-        if active_order:
-            raise ValueError("Master already has an active order")
-
         order_before = await self.order_repo.get_by_uid(order_uid)
         if not order_before:
             raise ValueError(f"Order {order_uid} not found")
-        if order_before.status != OrderStatus.NEW:
-            raise ValueError("Only NEW orders can be assigned")
+
+        allowed_reassign_statuses = {
+            OrderStatus.NEW,
+            OrderStatus.ASSIGNED,
+            OrderStatus.ACCEPTED,
+            OrderStatus.ON_THE_WAY,
+            OrderStatus.ARRIVED,
+            OrderStatus.REJECTED,
+        }
+        if order_before.status not in allowed_reassign_statuses:
+            raise ValueError(
+                f"Order status {order_before.status.value} cannot be reassigned now"
+            )
+
+        active_order = await self.order_repo.get_active_by_master(master_id)
+        if active_order and active_order.order_uid != order_uid:
+            raise ValueError("Master already has an active order")
+
+        if (
+            order_before.master_id == master_id
+            and order_before.status == OrderStatus.ASSIGNED
+        ):
+            raise ValueError("This master is already assigned to the order")
 
         order = await self.order_repo.assign_master(
             order_uid=order_uid,
@@ -82,17 +99,24 @@ class OrderService:
         if not order:
             raise ValueError(f"Order {order_uid} not found")
 
+        action = (
+            "master_reassigned"
+            if order_before.master_id and order_before.master_id != master_id
+            else "master_assigned"
+        )
         # Audit log
         self.session.add(AuditLog(
-            action="master_assigned",
+            action=action,
             entity_type="order",
             entity_id=order.id,
             performed_by_telegram_id=dispatcher_telegram_id,
             performed_by_role="dispatcher",
             details={
                 "order_uid": order_uid,
+                "previous_master_id": order_before.master_id,
                 "master_id": master_id,
                 "master_name": master.full_name,
+                "from_status": order_before.status.value,
             },
         ))
 

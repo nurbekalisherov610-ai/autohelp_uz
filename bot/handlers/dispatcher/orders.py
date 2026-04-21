@@ -17,6 +17,7 @@ from bot.keyboards.dispatcher_kb import (
     dispatcher_main_menu, dispatcher_order_actions,
     master_selection_keyboard, dispatcher_confirm_completion,
     dispatcher_order_navigation, dispatcher_video_prompt_keyboard,
+    dispatcher_active_orders_keyboard,
 )
 from locales.texts import t
 from core.config import settings
@@ -35,6 +36,7 @@ from repositories.master_repo import MasterRepo
 from repositories.stats_repo import StatsRepo
 
 router = Router(name="dispatcher")
+ACTIVE_ORDERS_PAGE_SIZE = 8
 
 
 def _dispatcher_menu_text() -> str:
@@ -279,14 +281,22 @@ async def dispatcher_view_order_card(
 
 @router.callback_query(
     RoleFilter("dispatcher", "admin", "super_admin"),
-    F.data == "disp:active_orders",
+    F.data.startswith("disp:active_orders"),
 )
 async def show_active_orders(
     callback: CallbackQuery,
     session: AsyncSession,
 ):
-    """Show all active orders."""
-    await callback.answer("📋 Yuklanmoqda...")
+    """Show active orders with direct card-open actions and paging."""
+    await callback.answer("Yuklanmoqda...")
+
+    page = 0
+    parts = (callback.data or "").split(":")
+    if len(parts) >= 3:
+        try:
+            page = max(0, int(parts[2]))
+        except ValueError:
+            page = 0
 
     order_repo = OrderRepo(session)
     orders = await order_repo.get_active_orders()
@@ -294,35 +304,59 @@ async def show_active_orders(
     if not orders:
         await _safe_edit_text(
             callback,
-            "✅ Hozircha faol buyurtmalar yo'q.",
+            "Hozircha faol buyurtmalar yo'q.",
             reply_markup=dispatcher_main_menu(),
         )
         return
 
-    lines = ["📋 <b>Faol buyurtmalar:</b>\n"]
-    for order in orders[:20]:
+    total = len(orders)
+    start = page * ACTIVE_ORDERS_PAGE_SIZE
+    if start >= total and total > 0:
+        page = 0
+        start = 0
+    end = start + ACTIVE_ORDERS_PAGE_SIZE
+    page_orders = orders[start:end]
+
+    lines = [
+        "<b>Faol buyurtmalar:</b>",
+        f"Jami: <b>{total}</b> ta",
+        f"Sahifa: <b>{page + 1}</b>/{max(1, (total + ACTIVE_ORDERS_PAGE_SIZE - 1) // ACTIVE_ORDERS_PAGE_SIZE)}",
+        "",
+    ]
+
+    for idx, order in enumerate(page_orders, start=start + 1):
         status_icons = {
-            "new": "🆕", "assigned": "👨‍🔧", "accepted": "✅",
-            "on_the_way": "🚗", "arrived": "📍", "in_progress": "🔧",
-            "awaiting_confirm": "⏳",
+            "new": "NEW",
+            "assigned": "ASSIGNED",
+            "accepted": "ACCEPTED",
+            "on_the_way": "ON_THE_WAY",
+            "arrived": "ARRIVED",
+            "in_progress": "IN_PROGRESS",
+            "awaiting_confirm": "AWAITING_CONFIRM",
         }
-        icon = status_icons.get(order.status.value, "❓")
+        icon = status_icons.get(order.status.value, order.status.value)
         problem = PROBLEM_LABELS[order.problem_type]["uz"]
-        master_name = escape(order.master.full_name) if order.master else "—"
-        client_name = escape(order.user.full_name) if order.user else "—"
+        master_name = escape(order.master.full_name) if order.master else "-"
+        client_name = escape(order.user.full_name) if order.user else "-"
         lines.append(
-            f"{icon} <code>{order.order_uid}</code>\n"
-            f"   👤 {client_name} • 👨‍🔧 {master_name}\n"
-            f"   {problem} • {order.created_at.strftime('%H:%M')}\n"
+            f"{idx}. <code>{order.order_uid}</code> [{icon}]\n"
+            f"   Mijoz: {client_name} | Usta: {master_name}\n"
+            f"   {problem} | {order.created_at.strftime('%H:%M')}\n"
         )
+
+    lines.append("Boshqarish uchun pastdagi tugmalardan buyurtmani tanlang.")
 
     await _safe_edit_text(
         callback,
         "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=dispatcher_main_menu(),
+        reply_markup=dispatcher_active_orders_keyboard(
+            [o.order_uid for o in page_orders],
+            page=page,
+            has_prev=page > 0,
+            has_next=end < total,
+        ),
     )
-
 
 @router.callback_query(
     RoleFilter("dispatcher", "admin", "super_admin"),
@@ -474,6 +508,12 @@ async def start_assign_master(
     order = await order_repo.get_by_uid(order_uid)
     if not order:
         await callback.answer("Buyurtma topilmadi!", show_alert=True)
+        await _safe_edit_text(
+            callback,
+            _dispatcher_menu_text(),
+            parse_mode="HTML",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
 
     master_repo = MasterRepo(session)
@@ -514,6 +554,12 @@ async def filter_masters_for_order(
     order = await order_repo.get_by_uid(order_uid)
     if not order:
         await callback.answer("Buyurtma topilmadi!", show_alert=True)
+        await _safe_edit_text(
+            callback,
+            _dispatcher_menu_text(),
+            parse_mode="HTML",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
 
     selected_spec = normalize_specialization(spec_token)
@@ -683,6 +729,21 @@ async def assign_master_to_order(
         )
     except ValueError as e:
         await callback.answer(str(e), show_alert=True)
+        latest_order = await OrderRepo(session).get_by_uid(order_uid)
+        if latest_order:
+            await _safe_edit_text(
+                callback,
+                _order_card_text(latest_order),
+                parse_mode="HTML",
+                reply_markup=_order_actions_for_status(latest_order),
+            )
+        else:
+            await _safe_edit_text(
+                callback,
+                _dispatcher_menu_text(),
+                parse_mode="HTML",
+                reply_markup=dispatcher_main_menu(),
+            )
         return
 
     master = await master_repo.get_by_id(master_id)
@@ -743,6 +804,12 @@ async def auto_assign_master(
     order = await order_repo.get_by_uid(order_uid)
     if not order:
         await callback.answer("Buyurtma topilmadi!", show_alert=True)
+        await _safe_edit_text(
+            callback,
+            _dispatcher_menu_text(),
+            parse_mode="HTML",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
 
     master_repo = MasterRepo(session)
@@ -752,6 +819,12 @@ async def auto_assign_master(
         await callback.answer(
             "Hozirda bo'sh usta yo'q! Qo'lda tanlang.",
             show_alert=True,
+        )
+        await _safe_edit_text(
+            callback,
+            _order_card_text(order),
+            parse_mode="HTML",
+            reply_markup=_order_actions_for_status(order),
         )
         return
 
@@ -765,6 +838,21 @@ async def auto_assign_master(
         )
     except ValueError as e:
         await callback.answer(str(e), show_alert=True)
+        latest_order = await order_repo.get_by_uid(order_uid)
+        if latest_order:
+            await _safe_edit_text(
+                callback,
+                _order_card_text(latest_order),
+                parse_mode="HTML",
+                reply_markup=_order_actions_for_status(latest_order),
+            )
+        else:
+            await _safe_edit_text(
+                callback,
+                _dispatcher_menu_text(),
+                parse_mode="HTML",
+                reply_markup=dispatcher_main_menu(),
+            )
         return
 
     best_specs = await master_repo.get_specializations(best.id)

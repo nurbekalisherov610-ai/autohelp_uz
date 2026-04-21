@@ -245,18 +245,26 @@ class OrderRepo:
         if not order:
             return None
 
+        old_status = order.status
+        old_master_id = order.master_id
         order.master_id = master_id
         order.dispatcher_id = dispatcher_id
         order.status = OrderStatus.ASSIGNED
         order.assigned_at = datetime.utcnow()
+        # Force a fresh dispatcher credibility video after each (re)assignment.
+        order.dispatcher_video_file_id = None
 
         await self._record_status_change(
             order_id=order.id,
-            old_status=OrderStatus.NEW,
+            old_status=old_status,
             new_status=OrderStatus.ASSIGNED,
             changed_by_telegram_id=dispatcher_telegram_id,
             changed_by_role="dispatcher",
-            note=f"Master ID {master_id} assigned",
+            note=(
+                f"Master changed: {old_master_id} -> {master_id}"
+                if old_master_id and old_master_id != master_id
+                else f"Master ID {master_id} assigned"
+            ),
         )
 
         await self.session.flush()
