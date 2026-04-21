@@ -88,6 +88,12 @@ def master_selection_keyboard(
         callback_data=f"assign_auto:{order_uid}"
     )])
     buttons[1:1] = _master_filter_rows(order_uid)
+    buttons.append(
+        [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")]
+    )
+    buttons.append(
+        [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")]
+    )
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -121,12 +127,19 @@ def dispatcher_order_actions(order_uid: str) -> InlineKeyboardMarkup:
                 callback_data=f"dispatch_video:{order_uid}"
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text="🏠 Dispetcher menyusi",
+                callback_data="disp:menu"
+            ),
+        ],
     ])
 
 
 def dispatcher_main_menu() -> InlineKeyboardMarkup:
     """Dispatcher main menu keyboard."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 Panel (yangilash)", callback_data="disp:menu")],
         [InlineKeyboardButton(text="📋 Faol buyurtmalar", callback_data="disp:active_orders")],
         [InlineKeyboardButton(text="👨‍🔧 Ustalar holati", callback_data="disp:masters_status")],
         [InlineKeyboardButton(text="📊 Bugungi statistika", callback_data="disp:today_stats")],
@@ -147,7 +160,30 @@ def dispatcher_confirm_completion(order_uid: str) -> InlineKeyboardMarkup:
                 callback_data=f"dispatch_edit_amount:{order_uid}"
             ),
         ],
+        [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")],
+        [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")],
     ])
+
+
+def dispatcher_order_navigation(order_uid: str) -> InlineKeyboardMarkup:
+    """Small navigation keyboard for returning to order card/menu."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")],
+            [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")],
+        ]
+    )
+
+
+def dispatcher_video_prompt_keyboard(order_uid: str) -> InlineKeyboardMarkup:
+    """Navigation keyboard shown while dispatcher is expected to send a video."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎥 Video rejimini qayta ochish", callback_data=f"dispatch_video:{order_uid}")],
+            [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")],
+            [InlineKeyboardButton(text="🏠 Dispetcher menyusi", callback_data="disp:menu")],
+        ]
+    )
 
 
 def reassign_order_keyboard(order_uid: str) -> InlineKeyboardMarkup:

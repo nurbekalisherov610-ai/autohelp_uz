@@ -7,6 +7,7 @@ from html import escape
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,7 @@ from bot.states.dispatcher_states import DispatcherOrderStates
 from bot.keyboards.dispatcher_kb import (
     dispatcher_main_menu, dispatcher_order_actions,
     master_selection_keyboard, dispatcher_confirm_completion,
+    dispatcher_order_navigation, dispatcher_video_prompt_keyboard,
 )
 from locales.texts import t
 from core.config import settings
@@ -33,6 +35,79 @@ from repositories.master_repo import MasterRepo
 from repositories.stats_repo import StatsRepo
 
 router = Router(name="dispatcher")
+
+
+def _dispatcher_menu_text() -> str:
+    return "📋 <b>Dispetcher paneli</b>\n\nAmalni tanlang:"
+
+
+def _order_card_text(order) -> str:
+    problem = PROBLEM_LABELS[order.problem_type]["uz"]
+    client_name = escape(order.user.full_name) if order.user and order.user.full_name else "—"
+    client_phone = escape(order.user.phone) if order.user and order.user.phone else "—"
+    master_name = escape(order.master.full_name) if order.master and order.master.full_name else "—"
+    description = escape(order.description) if order.description else "—"
+
+    return (
+        f"📋 <b>Buyurtma kartasi</b>\n\n"
+        f"ID: <code>{order.order_uid}</code>\n"
+        f"Status: <b>{escape(order.status.value)}</b>\n"
+        f"Mijoz: {client_name}\n"
+        f"Telefon: <code>{client_phone}</code>\n"
+        f"Muammo: {problem}\n"
+        f"Izoh: {description}\n"
+        f"Usta: {master_name}"
+    )
+
+
+def _order_actions_for_status(order) -> object:
+    if order.status == OrderStatus.AWAITING_CONFIRM:
+        return dispatcher_confirm_completion(order.order_uid)
+    if order.status in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}:
+        return dispatcher_main_menu()
+    return dispatcher_order_actions(order.order_uid)
+
+
+async def _safe_edit_text(
+    callback: CallbackQuery,
+    text: str,
+    *,
+    parse_mode: str | None = "HTML",
+    reply_markup=None,
+    disable_web_page_preview: bool = True,
+) -> None:
+    """
+    Safely edit callback message.
+    If edit fails (stale/modified/deleted), send a new message instead of dead-ending UI.
+    """
+    if not callback.message:
+        return
+
+    try:
+        await callback.message.edit_text(
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+        return
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            try:
+                await callback.message.edit_reply_markup(reply_markup=reply_markup)
+                return
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Fallback to a fresh message so dispatcher never loses controls.
+    await callback.message.answer(
+        text=text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+        disable_web_page_preview=disable_web_page_preview,
+    )
 
 
 def _dispatcher_video_prompt_text(order_uid: str) -> str:
@@ -58,13 +133,17 @@ async def _complete_dispatcher_video_step(
     order = await order_repo.get_by_uid(order_uid)
     if not order:
         await state.clear()
-        await message.answer("❌ Buyurtma topilmadi. Qaytadan urinib ko'ring.")
+        await message.answer(
+            "❌ Buyurtma topilmadi. Qaytadan urinib ko'ring.",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
     if order.status != OrderStatus.ASSIGNED:
         await state.clear()
         await message.answer(
             f"⚠️ Buyurtma <code>{order_uid}</code> endi dispatcher videosini kutmayapti.",
             parse_mode="HTML",
+            reply_markup=dispatcher_order_navigation(order_uid),
         )
         return
     if order.dispatcher_video_file_id:
@@ -72,6 +151,7 @@ async def _complete_dispatcher_video_step(
         await message.answer(
             f"ℹ️ Buyurtma <code>{order_uid}</code> uchun dispatcher videosi allaqachon yuborilgan.",
             parse_mode="HTML",
+            reply_markup=dispatcher_order_navigation(order_uid),
         )
         return
 
@@ -96,6 +176,7 @@ async def _complete_dispatcher_video_step(
         f"Mijoz buyurtma <code>{order_uid}</code> uchun tasdiqlash videosini oldi.\n"
         f"{'Usta ham xabardor qilindi.' if master_notified else 'Ustani xabardor qilib bo&#39;lmadi.'}",
         parse_mode="HTML",
+        reply_markup=dispatcher_order_actions(order_uid),
     )
 
 
@@ -110,17 +191,20 @@ async def _render_master_picker(
 ):
     """Render assignment keyboard with specialization hints."""
     if not masters:
-        await callback.message.edit_text(
+        await _safe_edit_text(
+            callback,
             f"⚠️ Buyurtma <code>{order_uid}</code> uchun mos usta topilmadi.\n"
             f"Filtrni o'zgartiring yoki qayta urinib ko'ring.",
             parse_mode="HTML",
+            reply_markup=dispatcher_order_navigation(order_uid),
         )
         return
 
     spec_map = await master_repo.get_specializations_map([m.id for m in masters])
     await state.update_data(assigning_order_uid=order_uid, search_order_uid=order_uid)
 
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         title or f"👨‍🔧 Buyurtma <code>{order_uid}</code> uchun usta tanlang:",
         parse_mode="HTML",
         reply_markup=master_selection_keyboard(
@@ -141,10 +225,56 @@ async def _render_master_picker(
 async def dispatcher_start(message: Message):
     """Dispatcher main menu."""
     await message.answer(
-        "📋 <b>Dispetcher paneli</b>\n\nAmalni tanlang:",
+        _dispatcher_menu_text(),
         parse_mode="HTML",
         reply_markup=dispatcher_main_menu(),
     )
+
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data == "disp:menu",
+)
+async def dispatcher_menu_callback(callback: CallbackQuery):
+    """Always-returnable dispatcher dashboard entry point."""
+    await _safe_edit_text(
+        callback,
+        _dispatcher_menu_text(),
+        parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_view:"),
+)
+async def dispatcher_view_order_card(
+    callback: CallbackQuery,
+    session: AsyncSession,
+):
+    """Re-open a single order card with proper action buttons."""
+    order_uid = callback.data.split(":", 1)[1]
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await callback.answer("Buyurtma topilmadi.", show_alert=True)
+        await _safe_edit_text(
+            callback,
+            _dispatcher_menu_text(),
+            parse_mode="HTML",
+            reply_markup=dispatcher_main_menu(),
+        )
+        return
+
+    await _safe_edit_text(
+        callback,
+        _order_card_text(order),
+        parse_mode="HTML",
+        reply_markup=_order_actions_for_status(order),
+    )
+    await callback.answer()
 
 
 @router.callback_query(
@@ -162,7 +292,11 @@ async def show_active_orders(
     orders = await order_repo.get_active_orders()
 
     if not orders:
-        await callback.message.edit_text("✅ Hozircha faol buyurtmalar yo'q.")
+        await _safe_edit_text(
+            callback,
+            "✅ Hozircha faol buyurtmalar yo'q.",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
 
     lines = ["📋 <b>Faol buyurtmalar:</b>\n"]
@@ -182,9 +316,11 @@ async def show_active_orders(
             f"   {problem} • {order.created_at.strftime('%H:%M')}\n"
         )
 
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         "\n".join(lines),
         parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
     )
 
 
@@ -204,7 +340,11 @@ async def show_masters_status(
     spec_map = await master_repo.get_specializations_map([m.id for m in masters])
 
     if not masters:
-        await callback.message.edit_text("Hech qanday usta topilmadi.")
+        await _safe_edit_text(
+            callback,
+            "Hech qanday usta topilmadi.",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
 
     status_icons = {"online": "🟢", "busy": "🟡", "offline": "🔴"}
@@ -220,9 +360,11 @@ async def show_masters_status(
             f"✅{m.completed_orders} buyurtma"
         )
 
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         "\n".join(lines),
         parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
     )
 
 
@@ -249,7 +391,12 @@ async def show_today_stats(
         f"🔄 Faol buyurtmalar: {stats['active_orders']}\n"
     )
 
-    await callback.message.edit_text(text, parse_mode="HTML")
+    await _safe_edit_text(
+        callback,
+        text,
+        parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
+    )
 
 
 @router.callback_query(
@@ -302,7 +449,12 @@ async def show_sla_alerts(
     else:
         lines.append("\n✅ Hozircha SLA buzilishlari yo'q.")
 
-    await callback.message.edit_text("\n".join(lines), parse_mode="HTML")
+    await _safe_edit_text(
+        callback,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
+    )
 
 
 # ── Assign master to order ────────────────────────────────────────
@@ -415,12 +567,14 @@ async def start_master_search(
     order_uid = callback.data.split(":")[1]
     await state.update_data(search_order_uid=order_uid, assigning_order_uid=order_uid)
     await state.set_state(DispatcherOrderStates.searching_master)
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         f"🔎 Usta qidirish\n"
         f"Buyurtma: <code>{order_uid}</code>\n\n"
         f"Ism, telefon yoki Telegram ID yuboring.\n"
         f"Masalan: <code>Ali</code> yoki <code>99890</code>",
         parse_mode="HTML",
+        reply_markup=dispatcher_order_navigation(order_uid),
     )
     await callback.answer()
 
@@ -473,7 +627,8 @@ async def process_master_search(
 
     if not matched:
         await message.answer(
-            "Hech narsa topilmadi. Boshqa so'z kiriting yoki 'Hammasi' tugmasini bosing."
+            "Hech narsa topilmadi. Boshqa so'z kiriting yoki 'Hammasi' tugmasini bosing.",
+            reply_markup=dispatcher_order_navigation(order_uid),
         )
         return
 
@@ -524,16 +679,19 @@ async def assign_master_to_order(
 
     master = await master_repo.get_by_id(master_id)
     safe_master_name = escape(master.full_name or "—") if master else "—"
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         f"✅ Buyurtma <code>{order_uid}</code> ga usta tayinlandi: "
         f"<b>{safe_master_name}</b>",
         parse_mode="HTML",
+        reply_markup=dispatcher_order_actions(order_uid),
     )
 
     # Ask dispatcher for video confirmation
     await callback.message.answer(
         _dispatcher_video_prompt_text(order_uid),
         parse_mode="HTML",
+        reply_markup=dispatcher_video_prompt_keyboard(order_uid),
     )
     await state.update_data(
         video_order_uid=order_uid,
@@ -603,18 +761,21 @@ async def auto_assign_master(
 
     best_specs = await master_repo.get_specializations(best.id)
 
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         f"🤖 Tizim taklifi qabul qilindi!\n\n"
         f"✅ Buyurtma <code>{order_uid}</code>\n"
         f"👨‍🔧 Usta: <b>{escape(best.full_name or '—')}</b> "
         f"[{specialization_short_text(best_specs)}] ⭐{best.rating:.1f}",
         parse_mode="HTML",
+        reply_markup=dispatcher_order_actions(order_uid),
     )
 
     # Ask for video
     await callback.message.answer(
         _dispatcher_video_prompt_text(order_uid),
         parse_mode="HTML",
+        reply_markup=dispatcher_video_prompt_keyboard(order_uid),
     )
     await state.update_data(video_order_uid=order_uid, assigned_master_id=best.id)
     await state.set_state(DispatcherOrderStates.recording_video)
@@ -671,6 +832,7 @@ async def start_dispatcher_video_from_card(
     await callback.message.answer(
         _dispatcher_video_prompt_text(order_uid),
         parse_mode="HTML",
+        reply_markup=dispatcher_video_prompt_keyboard(order_uid),
     )
 
     chat = callback.message.chat if callback.message else None
@@ -702,7 +864,10 @@ async def process_dispatcher_video(
 
     if not order_uid:
         await state.clear()
-        await message.answer("⚠️ Avval buyurtmaga usta tayinlang. Keyin video yuboring.")
+        await message.answer(
+            "⚠️ Avval buyurtmaga usta tayinlang. Keyin video yuboring.",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
 
     await _complete_dispatcher_video_step(
@@ -731,7 +896,10 @@ async def process_dispatcher_video_file(
     order_uid = data.get("video_order_uid")
     if not order_uid:
         await state.clear()
-        await message.answer("⚠️ Avval buyurtmaga usta tayinlang. Keyin video yuboring.")
+        await message.answer(
+            "⚠️ Avval buyurtmaga usta tayinlang. Keyin video yuboring.",
+            reply_markup=dispatcher_main_menu(),
+        )
         return
 
     duration = int(getattr(message.video, "duration", 0) or 0)
@@ -756,12 +924,20 @@ async def process_dispatcher_video_file(
     DispatcherOrderStates.recording_video,
     ~(F.video_note | F.video),
 )
-async def wrong_video_format(message: Message):
+async def wrong_video_format(message: Message, state: FSMContext):
     """Handle non-video messages during video recording state."""
+    data = await state.get_data()
+    order_uid = data.get("video_order_uid")
+    reply_markup = (
+        dispatcher_video_prompt_keyboard(order_uid)
+        if order_uid
+        else dispatcher_main_menu()
+    )
     await message.answer(
         "⚠️ Iltimos, dumaloq video yoki oddiy video yuboring (30 soniyagacha).\n"
         "Kerak bo'lsa /video ORDER_UID buyrug'ini yuboring.",
         parse_mode="HTML",
+        reply_markup=reply_markup,
     )
 
 
@@ -792,7 +968,8 @@ async def arm_dispatcher_video_mode(
     )
     if not pending:
         await message.answer(
-            "ℹ️ Sizda dispatcher videosi kutilayotgan buyurtma topilmadi."
+            "ℹ️ Sizda dispatcher videosi kutilayotgan buyurtma topilmadi.",
+            reply_markup=dispatcher_main_menu(),
         )
         return
 
@@ -807,6 +984,7 @@ async def arm_dispatcher_video_mode(
             await message.answer(
                 f"⚠️ <code>{escape(requested_uid)}</code> topilmadi yoki video allaqachon yuborilgan.",
                 parse_mode="HTML",
+                reply_markup=dispatcher_main_menu(),
             )
             return
     elif len(pending) == 1:
@@ -825,6 +1003,7 @@ async def arm_dispatcher_video_mode(
     await message.answer(
         _dispatcher_video_prompt_text(target_order.order_uid),
         parse_mode="HTML",
+        reply_markup=dispatcher_video_prompt_keyboard(target_order.order_uid),
     )
 
 
@@ -943,9 +1122,11 @@ async def confirm_order_completion(
             .values(confirmed_by_dispatcher=True)
         )
 
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         f"✅ Buyurtma <code>{order_uid}</code> tasdiqlandi va tugallandi!",
         parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
     )
 
     # Notify client with rating prompt
@@ -987,10 +1168,12 @@ async def start_edit_amount(
     await state.update_data(edit_amount_order_uid=order_uid)
     await state.set_state(DispatcherOrderStates.editing_amount)
 
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         f"✏️ <b>{order_uid}</b> uchun yangi summani kiriting (so'm):\n\n"
         f"Masalan: <code>180000</code>",
         parse_mode="HTML",
+        reply_markup=dispatcher_order_navigation(order_uid),
     )
     await callback.answer()
 
@@ -1045,6 +1228,7 @@ async def process_edit_amount(
         f"✅ Buyurtma <code>{order_uid}</code> summasi yangilandi: "
         f"<b>{amount:,.0f} so'm</b>",
         parse_mode="HTML",
+        reply_markup=dispatcher_order_navigation(order_uid),
     )
 
 
@@ -1071,9 +1255,11 @@ async def dispatcher_cancel_order(
         await callback.answer(str(e), show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await _safe_edit_text(
+        callback,
         f"❌ Buyurtma <code>{order_uid}</code> bekor qilindi.",
         parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
     )
 
     # Notify client
