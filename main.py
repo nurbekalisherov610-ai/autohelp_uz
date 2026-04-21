@@ -194,35 +194,12 @@ async def on_startup(bot: Bot):
     else:
         logger.info("⚡ Redis not configured — using memory storage")
 
-    # Notify admins
-    for admin_id in settings.admin_ids:
-        try:
-            await bot.send_message(
-                admin_id,
-                "🚀 <b>AutoHelp.uz Bot ishga tushdi!</b>\n\n"
-                "Barcha tizimlar tayyor ✅",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
-
     logger.info("✅ Startup complete — bot is ready!")
 
 
 async def on_shutdown(bot: Bot):
     """Actions to perform on bot shutdown."""
     logger.info("🔄 AutoHelp.uz Bot is shutting down...")
-
-    # Notify admins
-    for admin_id in settings.admin_ids:
-        try:
-            await bot.send_message(
-                admin_id,
-                "⚠️ <b>AutoHelp.uz Bot o'chmoqda...</b>",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
 
     # Close connections
     await close_db()
