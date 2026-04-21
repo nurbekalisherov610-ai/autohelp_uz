@@ -87,7 +87,7 @@ def master_selection_keyboard(
         text="🤖 Tizim taklifi (eng yaqin/bo'sh usta)",
         callback_data=f"assign_auto:{order_uid}"
     )])
-    buttons[1:1] = _master_filter_rows(order_uid)
+    # Keep picker simple: direct list by names + auto suggestion.
     buttons.append(
         [InlineKeyboardButton(text="↩️ Buyurtma kartasi", callback_data=f"dispatch_view:{order_uid}")]
     )

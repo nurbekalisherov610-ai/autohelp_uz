@@ -151,6 +151,54 @@ class MasterRepo:
         masters.sort(key=master_rank)
         return masters
 
+    async def get_assignable_masters_for_problem(
+        self,
+        problem_type: ProblemType | str | None,
+        allow_offline_fallback: bool = True,
+    ) -> list[Master]:
+        """
+        Get masters eligible for assignment.
+        1) Prefer online available masters (no active orders).
+        2) If none and fallback is enabled, include active offline masters
+           that are not currently busy.
+        """
+        online_first = await self.get_available_masters_for_problem(problem_type)
+        if online_first or not allow_offline_fallback:
+            return online_first
+
+        all_active = await self.get_all_active()
+        if not all_active:
+            return []
+
+        busy_ids = await self._get_busy_master_ids()
+        candidates = [m for m in all_active if m.id not in busy_ids]
+        if not candidates:
+            return []
+
+        problem_value = (
+            problem_type.value
+            if isinstance(problem_type, ProblemType)
+            else str(problem_type or "other")
+        )
+        priority = problem_specialization_priority(problem_value)
+        priority_index = {spec: idx for idx, spec in enumerate(priority)}
+        spec_map = await self.get_specializations_map([m.id for m in candidates])
+
+        def fallback_rank(master: Master) -> tuple[int, int, float, int, str]:
+            specs = spec_map.get(master.id) or [MasterSpecializationType.UNIVERSAL]
+            best_match = min(priority_index.get(spec, len(priority) + 1) for spec in specs)
+            status_rank = 0 if master.status == MasterStatus.ONLINE else 1
+            return (
+                status_rank,
+                best_match,
+                -float(master.rating or 0.0),
+                -int(master.completed_orders or 0),
+                master.full_name,
+            )
+
+        candidates.sort(key=fallback_rank)
+        return candidates
+
     async def get_all_active(self) -> list[Master]:
         """Get all active masters (any status)."""
         result = await self.session.scalars(
@@ -225,7 +273,10 @@ class MasterRepo:
         problem_type: ProblemType | str | None = None,
     ) -> Master | None:
         """Get the best currently available master for the problem type."""
-        masters = await self.get_available_masters_for_problem(problem_type)
+        masters = await self.get_assignable_masters_for_problem(
+            problem_type,
+            allow_offline_fallback=True,
+        )
         return masters[0] if masters else None
 
     async def count_online(self) -> int:

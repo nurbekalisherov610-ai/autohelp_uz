@@ -193,8 +193,8 @@ async def _render_master_picker(
     if not masters:
         await _safe_edit_text(
             callback,
-            f"⚠️ Buyurtma <code>{order_uid}</code> uchun mos usta topilmadi.\n"
-            f"Filtrni o'zgartiring yoki qayta urinib ko'ring.",
+            f"⚠️ Buyurtma <code>{order_uid}</code> uchun usta topilmadi.\n"
+            f"Iltimos, ustalarni tekshirib qayta urinib ko'ring.",
             parse_mode="HTML",
             reply_markup=dispatcher_order_navigation(order_uid),
         )
@@ -477,7 +477,10 @@ async def start_assign_master(
         return
 
     master_repo = MasterRepo(session)
-    masters = await master_repo.get_available_masters_for_problem(order.problem_type)
+    masters = await master_repo.get_assignable_masters_for_problem(
+        order.problem_type,
+        allow_offline_fallback=True,
+    )
     preferred = problem_specialization_priority(order.problem_type.value)
 
     await _render_master_picker(
@@ -489,7 +492,7 @@ async def start_assign_master(
         preferred=preferred,
         title=(
             f"👨‍🔧 Buyurtma <code>{order_uid}</code> uchun usta tanlang:\n"
-            f"Filtr yoki qidiruvdan foydalaning."
+            f"Ismdan tanlang va bir marta bosing."
         ),
     )
     await callback.answer()
@@ -519,7 +522,10 @@ async def filter_masters_for_order(
         return
 
     master_repo = MasterRepo(session)
-    masters = await master_repo.get_available_masters_for_problem(order.problem_type)
+    masters = await master_repo.get_assignable_masters_for_problem(
+        order.problem_type,
+        allow_offline_fallback=True,
+    )
     spec_map = await master_repo.get_specializations_map([m.id for m in masters])
 
     filtered = []
@@ -571,7 +577,7 @@ async def start_master_search(
         callback,
         f"🔎 Usta qidirish\n"
         f"Buyurtma: <code>{order_uid}</code>\n\n"
-        f"Ism, telefon yoki Telegram ID yuboring.\n"
+        f"Ism yoki telefon bo'yicha qidiring.\n"
         f"Masalan: <code>Ali</code> yoki <code>99890</code>",
         parse_mode="HTML",
         reply_markup=dispatcher_order_navigation(order_uid),
@@ -610,7 +616,10 @@ async def process_master_search(
         return
 
     master_repo = MasterRepo(session)
-    masters = await master_repo.get_available_masters_for_problem(order.problem_type)
+    masters = await master_repo.get_assignable_masters_for_problem(
+        order.problem_type,
+        allow_offline_fallback=True,
+    )
     spec_map = await master_repo.get_specializations_map([m.id for m in masters])
 
     matched = []
@@ -619,7 +628,6 @@ async def process_master_search(
             [
                 master.full_name or "",
                 master.phone or "",
-                str(master.telegram_id),
             ]
         ).lower()
         if query in haystack:
