@@ -39,6 +39,7 @@ from tasks.sla_monitor import check_sla_violations
 from tasks.backup import run_daily_backup
 from tasks.reports import send_daily_report, send_weekly_report
 from tasks.order_draft_reminder import send_order_draft_reminders
+from services.env_bootstrap import sync_roles_from_env
 
 
 POLL_LOCK_TTL_SECONDS = 120
@@ -177,6 +178,12 @@ async def on_startup(bot: Bot):
     # Initialize database (create tables)
     await init_db()
     logger.info("✅ Database initialized")
+
+    # Sync env-defined staff/master roles into DB (idempotent).
+    try:
+        await sync_roles_from_env()
+    except Exception as e:
+        logger.error(f"Env role bootstrap failed: {e}")
 
     # Test Redis if configured
     if settings.use_redis:

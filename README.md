@@ -49,7 +49,14 @@ copy .env.example .env
 # 5. Initialize database
 python seed.py
 
-# 6. Add initial staff
+# 6. Add initial staff (choose one option)
+# Option A (recommended on Railway): set env vars and restart deploy
+#   ADMIN_IDS=216358874,524551673
+#   DISPATCHER_IDS=111111111
+#   MASTER_IDS=222222222,333333333
+#   MASTER_ROLES=222222222=battery,electrical;333333333=tire
+#
+# Option B (manual CLI):
 python manage.py add_dispatcher <TELEGRAM_ID> "Dispatcher Name" "+998901234567"
 python manage.py add_master <TELEGRAM_ID> "Master Name" "+998901234567"
 
@@ -176,6 +183,11 @@ python manage.py stats
 |----------|-----------|---------|
 | `BOT_TOKEN` | Telegram Bot API token | required |
 | `ADMIN_IDS` | Comma-separated admin Telegram IDs | required |
+| `ADMIN_STAFF_IDS` | Optional DB admins (role=admin) created from env IDs | empty |
+| `DISPATCHER_IDS` | Dispatcher Telegram IDs auto-created/updated in DB | empty |
+| `MASTER_IDS` | Master Telegram IDs auto-created/updated in DB | empty |
+| `MASTER_ROLES` | Master specializations map. Example: `856=battery;962=tire` | empty |
+| `ENV_BOOTSTRAP_ENABLED` | Enables env-to-DB role sync on startup | true |
 | `DISPATCHER_GROUP_ID` | Telegram group chat ID (optional, for hybrid/group mode) | 0 |
 | `DISPATCH_MODE` | Dispatch routing mode: `bot_only` / `hybrid` / `group_only` | hybrid |
 | `VIDEO_CHANNEL_ID` | Channel for video confirmations | required |

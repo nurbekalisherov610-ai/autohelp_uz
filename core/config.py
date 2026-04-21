@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # ── Telegram Bot ──────────────────────────────────────────────
     bot_token: str
     admin_ids: Annotated[List[int], NoDecode] = []
+    admin_staff_ids: Annotated[List[int], NoDecode] = []
+    dispatcher_ids: Annotated[List[int], NoDecode] = []
+    master_ids: Annotated[List[int], NoDecode] = []
+    master_roles: str = ""
+    env_bootstrap_enabled: bool = True
     dispatcher_group_id: int = 0
     dispatch_mode: Literal["bot_only", "hybrid", "group_only"] = "bot_only"
     video_channel_id: int = 0
@@ -63,11 +68,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_file: str = "logs/autohelp.log"
 
-    @field_validator("admin_ids", mode="before")
-    @classmethod
-    def parse_admin_ids(cls, value):
+    @staticmethod
+    def _parse_id_list(value):
         """
-        Accepts ADMIN_IDS in multiple formats:
+        Accepts ID lists in multiple formats:
         - JSON list: [123, 456]
         - CSV string: 123,456
         - Single int/string: 123
@@ -122,6 +126,11 @@ class Settings(BaseSettings):
             return [int(x) for x in re.findall(r"-?\d+", raw)]
 
         return value
+
+    @field_validator("admin_ids", "admin_staff_ids", "dispatcher_ids", "master_ids", mode="before")
+    @classmethod
+    def parse_id_lists(cls, value):
+        return cls._parse_id_list(value)
 
     @field_validator("dispatch_mode", mode="before")
     @classmethod
