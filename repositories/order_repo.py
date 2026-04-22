@@ -188,6 +188,31 @@ class OrderRepo:
         )
         return list(result.all())
 
+    async def get_pending_auto_dispatcher_videos(
+        self,
+        ready_before: datetime,
+        limit: int = 50,
+    ) -> list[Order]:
+        """
+        Get orders that are ready for automatic dispatcher confirmation video.
+        Uses dispatcher_video_file_id as a persistent sent marker.
+        """
+        result = await self.session.scalars(
+            select(Order)
+            .where(
+                Order.created_at <= ready_before,
+                Order.dispatcher_video_file_id.is_(None),
+                Order.status.notin_([
+                    OrderStatus.COMPLETED,
+                    OrderStatus.CANCELLED,
+                ]),
+            )
+            .options(selectinload(Order.user))
+            .order_by(Order.created_at.asc())
+            .limit(limit)
+        )
+        return list(result.all())
+
     # ── Update Status ─────────────────────────────────────────────
 
     async def update_status(
@@ -251,8 +276,6 @@ class OrderRepo:
         order.dispatcher_id = dispatcher_id
         order.status = OrderStatus.ASSIGNED
         order.assigned_at = datetime.utcnow()
-        # Force a fresh dispatcher credibility video after each (re)assignment.
-        order.dispatcher_video_file_id = None
 
         await self._record_status_change(
             order_id=order.id,

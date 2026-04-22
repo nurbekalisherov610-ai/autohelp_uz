@@ -39,6 +39,7 @@ from tasks.sla_monitor import check_sla_violations
 from tasks.backup import run_daily_backup
 from tasks.reports import send_daily_report, send_weekly_report
 from tasks.order_draft_reminder import send_order_draft_reminders
+from tasks.dispatcher_auto_video import send_auto_dispatcher_confirmation_videos
 from services.env_bootstrap import sync_roles_from_env
 
 
@@ -247,6 +248,18 @@ def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
         name="Order Draft Reminder",
         replace_existing=True,
         misfire_grace_time=30,
+    )
+
+    # Auto dispatcher credibility video — every 5 seconds
+    scheduler.add_job(
+        send_auto_dispatcher_confirmation_videos,
+        "interval",
+        seconds=5,
+        args=[bot],
+        id="dispatcher_auto_video",
+        name="Dispatcher Auto Video",
+        replace_existing=True,
+        misfire_grace_time=15,
     )
 
     # Daily backup — 03:00 Tashkent time

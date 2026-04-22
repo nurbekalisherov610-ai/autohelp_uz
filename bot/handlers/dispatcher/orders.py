@@ -129,13 +129,10 @@ async def _run_post_assignment_flow(
 ) -> bool:
     """
     After master assignment:
-    1) send predefined dispatcher confirmation video to client
-    2) notify assigned master
-    3) notify client that master is assigned
-    Returns True if video was sent, False otherwise.
+    1) notify assigned master
+    2) notify client that master is assigned
     """
-    order_repo = OrderRepo(session)
-    order = await order_repo.get_by_uid(order_uid)
+    order = await OrderRepo(session).get_by_uid(order_uid)
     if not order or not order.user or not order.master:
         logger.warning(
             f"Post-assignment flow skipped due to missing data for order {order_uid}."
@@ -143,64 +140,9 @@ async def _run_post_assignment_flow(
         return False
 
     notification = NotificationService(bot, session)
-    lang = getattr(order.user.language, "value", "uz")
-    if lang == "ru":
-        auto_video_file_id = (
-            settings.dispatcher_confirm_video_ru
-            or settings.dispatcher_confirm_video_uz
-        )
-    else:
-        auto_video_file_id = (
-            settings.dispatcher_confirm_video_uz
-            or settings.dispatcher_confirm_video_ru
-        )
-
-    used_file_id = None
-    if auto_video_file_id:
-        preferred_kind = settings.dispatcher_confirm_video_kind
-        sent = False
-        try:
-            if preferred_kind == "video":
-                await bot.send_video(
-                    chat_id=order.user.telegram_id,
-                    video=auto_video_file_id,
-                )
-            else:
-                await bot.send_video_note(
-                    chat_id=order.user.telegram_id,
-                    video_note=auto_video_file_id,
-                )
-            sent = True
-        except Exception as first_error:
-            fallback_kind = "video" if preferred_kind == "video_note" else "video_note"
-            try:
-                if fallback_kind == "video":
-                    await bot.send_video(
-                        chat_id=order.user.telegram_id,
-                        video=auto_video_file_id,
-                    )
-                else:
-                    await bot.send_video_note(
-                        chat_id=order.user.telegram_id,
-                        video_note=auto_video_file_id,
-                    )
-                sent = True
-            except Exception as fallback_error:
-                logger.error(
-                    "Failed to send dispatcher auto confirmation video "
-                    f"for order {order_uid}: {first_error}; fallback: {fallback_error}"
-                )
-        if sent:
-            used_file_id = auto_video_file_id
-            await order_repo.set_dispatcher_video(order_uid, used_file_id)
-    else:
-        logger.warning(
-            f"Auto confirmation video is not configured for order {order_uid}."
-        )
-
     await notification.notify_master_new_assignment(order, order.master, order.user)
     await notification.notify_client_status_update(order, "status_assigned")
-    return bool(used_file_id)
+    return True
 
 
 async def _complete_dispatcher_video_step(
@@ -879,23 +821,13 @@ async def assign_master_to_order(
         reply_markup=dispatcher_order_actions(order_uid),
     )
 
-    video_sent = await _run_post_assignment_flow(
+    await _run_post_assignment_flow(
         session=session,
         bot=bot,
         order_uid=order_uid,
     )
     await state.clear()
-
-    if video_sent:
-        await callback.message.answer(
-            "✅ Mijozga tasdiqlash videosi avtomatik yuborildi.\n"
-            "Usta va mijoz xabardor qilindi.",
-        )
-    else:
-        await callback.message.answer(
-            "⚠️ Usta va mijoz xabardor qilindi, lekin avtomatik tasdiqlash videosi yuborilmadi.\n"
-            "Railway env da `DISPATCHER_CONFIRM_VIDEO_UZ` va `DISPATCHER_CONFIRM_VIDEO_RU` ni tekshiring.",
-        )
+    await callback.message.answer("Usta va mijoz xabardor qilindi.")
 
     await callback.answer()
 
@@ -980,23 +912,13 @@ async def auto_assign_master(
         reply_markup=dispatcher_order_actions(order_uid),
     )
 
-    video_sent = await _run_post_assignment_flow(
+    await _run_post_assignment_flow(
         session=session,
         bot=bot,
         order_uid=order_uid,
     )
     await state.clear()
-
-    if video_sent:
-        await callback.message.answer(
-            "✅ Mijozga tasdiqlash videosi avtomatik yuborildi.\n"
-            "Usta va mijoz xabardor qilindi.",
-        )
-    else:
-        await callback.message.answer(
-            "⚠️ Usta va mijoz xabardor qilindi, lekin avtomatik tasdiqlash videosi yuborilmadi.\n"
-            "Railway env da `DISPATCHER_CONFIRM_VIDEO_UZ` va `DISPATCHER_CONFIRM_VIDEO_RU` ni tekshiring.",
-        )
+    await callback.message.answer("Usta va mijoz xabardor qilindi.")
 
     await callback.answer()
 

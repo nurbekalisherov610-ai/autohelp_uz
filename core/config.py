@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     sla_on_the_way_timeout: int = 60
     sla_confirm_timeout: int = 15
     sla_alert_cooldown_minutes: int = 30
+    dispatcher_auto_video_delay_seconds: int = 25
     order_draft_reminder_minutes: int = 10
 
     # ── Logging ───────────────────────────────────────────────────
