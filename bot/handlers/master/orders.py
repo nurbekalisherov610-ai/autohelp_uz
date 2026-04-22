@@ -6,6 +6,7 @@ payment entry, and video confirmation.
 from html import escape
 
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,47 @@ def _master_keyboard_status_key(status: OrderStatus | None) -> str | None:
         OrderStatus.IN_PROGRESS: "in_progress",
     }
     return mapping.get(status)
+
+
+async def _safe_master_edit_text(
+    callback: CallbackQuery,
+    text: str,
+    *,
+    parse_mode: str | None = "HTML",
+    reply_markup=None,
+    disable_web_page_preview: bool = True,
+) -> None:
+    """
+    Safely edit callback message.
+    If edit fails (stale/modified/deleted), send a fresh message so flow never dead-ends.
+    """
+    if not callback.message:
+        return
+
+    try:
+        await callback.message.edit_text(
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+        return
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            try:
+                await callback.message.edit_reply_markup(reply_markup=reply_markup)
+                return
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        text=text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+        disable_web_page_preview=disable_web_page_preview,
+    )
 
 
 async def _get_order_for_master(
@@ -215,7 +257,6 @@ async def master_rating(
 # ── Accept/Reject order ──────────────────────────────────────────
 
 @router.callback_query(
-    RoleFilter("master"),
     F.data.startswith("master_accept:"),
 )
 async def accept_order(
@@ -225,14 +266,36 @@ async def accept_order(
     user_data: Master | None = None,
 ):
     """Master accepts an order."""
-    order_uid = callback.data.split(":")[1]
-    _, validation_error = await _get_order_for_master(
+    parts = (callback.data or "").split(":", 1)
+    if len(parts) < 2 or not parts[1]:
+        await callback.answer("Xatolik: noto'g'ri buyruq.", show_alert=True)
+        return
+    order_uid = parts[1]
+    order, validation_error = await _get_order_for_master(
         session=session,
         order_uid=order_uid,
         master_telegram_id=callback.from_user.id,
     )
     if validation_error:
         await callback.answer(validation_error, show_alert=True)
+        return
+
+    status_key = _master_keyboard_status_key(order.status) if order else None
+    if order and order.status != OrderStatus.ASSIGNED:
+        if status_key:
+            await _safe_master_edit_text(
+                callback,
+                f"ℹ️ Buyurtma allaqachon <b>{order.status.value}</b> holatida.\n\n"
+                "Davom etish uchun keyingi bosqichni bosing.",
+                parse_mode="HTML",
+                reply_markup=master_status_update_keyboard(order_uid, status_key),
+            )
+            await callback.answer("Buyurtma holati yangilandi.")
+            return
+        await callback.answer(
+            f"Bu buyurtma hozir {order.status.value} holatida.",
+            show_alert=True,
+        )
         return
 
     order_service = OrderService(session)
@@ -252,7 +315,8 @@ async def accept_order(
     master_repo = MasterRepo(session)
     await master_repo.set_status(callback.from_user.id, MasterStatus.BUSY)
 
-    await callback.message.edit_text(
+    await _safe_master_edit_text(
+        callback,
         f"✅ Buyurtma <code>{order_uid}</code> qabul qilindi!\n\n"
         f"Keyingi qadam: status yangilang 👇",
         parse_mode="HTML",
@@ -268,7 +332,6 @@ async def accept_order(
 
 
 @router.callback_query(
-    RoleFilter("master"),
     F.data.startswith("master_reject:"),
 )
 async def reject_order(
@@ -278,14 +341,36 @@ async def reject_order(
     user_data: Master | None = None,
 ):
     """Master rejects an order."""
-    order_uid = callback.data.split(":")[1]
-    _, validation_error = await _get_order_for_master(
+    parts = (callback.data or "").split(":", 1)
+    if len(parts) < 2 or not parts[1]:
+        await callback.answer("Xatolik: noto'g'ri buyruq.", show_alert=True)
+        return
+    order_uid = parts[1]
+    order, validation_error = await _get_order_for_master(
         session=session,
         order_uid=order_uid,
         master_telegram_id=callback.from_user.id,
     )
     if validation_error:
         await callback.answer(validation_error, show_alert=True)
+        return
+
+    status_key = _master_keyboard_status_key(order.status) if order else None
+    if order and order.status != OrderStatus.ASSIGNED:
+        if status_key:
+            await _safe_master_edit_text(
+                callback,
+                f"ℹ️ Buyurtma allaqachon <b>{order.status.value}</b> bosqichida.\n\n"
+                "Rad etish endi mumkin emas, keyingi bosqich tugmasidan foydalaning.",
+                parse_mode="HTML",
+                reply_markup=master_status_update_keyboard(order_uid, status_key),
+            )
+            await callback.answer("Buyurtma holati yangilandi.")
+            return
+        await callback.answer(
+            f"Bu buyurtma hozir {order.status.value} holatida.",
+            show_alert=True,
+        )
         return
 
     order_service = OrderService(session)
@@ -301,7 +386,8 @@ async def reject_order(
         await callback.answer(str(e), show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await _safe_master_edit_text(
+        callback,
         f"❌ Buyurtma <code>{order_uid}</code> rad etildi.",
         parse_mode="HTML",
     )
@@ -317,7 +403,6 @@ async def reject_order(
 # ── Status updates (on_the_way → arrived → in_progress → done) ───
 
 @router.callback_query(
-    RoleFilter("master"),
     F.data.startswith("master_status:"),
 )
 async def update_order_status(
@@ -362,7 +447,8 @@ async def update_order_status(
         if order.status != OrderStatus.IN_PROGRESS:
             status_key = _master_keyboard_status_key(order.status)
             if status_key:
-                await callback.message.edit_text(
+                await _safe_master_edit_text(
+                    callback,
                     f"ℹ️ Buyurtma holati: <b>{order.status.value}</b>\n\n"
                     "Iltimos, navbatdagi to'g'ri bosqichni bosing.",
                     parse_mode="HTML",
@@ -379,7 +465,8 @@ async def update_order_status(
 
         await state.update_data(completing_order_uid=order_uid)
         await state.set_state(MasterOrderStates.entering_amount)
-        await callback.message.edit_text(
+        await _safe_master_edit_text(
+            callback,
             t("master_enter_amount", "uz"),
             parse_mode="HTML",
         )
@@ -397,7 +484,8 @@ async def update_order_status(
         fresh_order = await OrderRepo(session).get_by_uid(order_uid)
         status_key = _master_keyboard_status_key(fresh_order.status) if fresh_order else None
         if status_key:
-            await callback.message.edit_text(
+            await _safe_master_edit_text(
+                callback,
                 f"ℹ️ Buyurtma holati yangilanibdi: <b>{fresh_order.status.value}</b>\n\n"
                 "Iltimos, navbatdagi bosqichni davom ettiring.",
                 parse_mode="HTML",
@@ -416,7 +504,8 @@ async def update_order_status(
     }
     label = status_labels.get(new_status_str, "✅ Status yangilandi")
 
-    await callback.message.edit_text(
+    await _safe_master_edit_text(
+        callback,
         f"{label}\n\nBuyurtma: <code>{order_uid}</code>",
         parse_mode="HTML",
         reply_markup=master_status_update_keyboard(order_uid, new_status_str),
@@ -463,7 +552,6 @@ async def process_payment_amount(
 
 
 @router.callback_query(
-    RoleFilter("master"),
     F.data.startswith("master_amount:"),
 )
 async def request_amount_from_button(
@@ -475,7 +563,11 @@ async def request_amount_from_button(
     Legacy/compatibility handler:
     Some keyboards still emit master_amount:<order_uid>.
     """
-    order_uid = callback.data.split(":")[1]
+    parts = (callback.data or "").split(":", 1)
+    if len(parts) < 2 or not parts[1]:
+        await callback.answer("Xatolik: noto'g'ri buyruq.", show_alert=True)
+        return
+    order_uid = parts[1]
     order, validation_error = await _get_order_for_master(
         session=session,
         order_uid=order_uid,
@@ -494,7 +586,8 @@ async def request_amount_from_button(
 
     await state.update_data(completing_order_uid=order_uid)
     await state.set_state(MasterOrderStates.entering_amount)
-    await callback.message.edit_text(
+    await _safe_master_edit_text(
+        callback,
         t("master_enter_amount", "uz"),
         parse_mode="HTML",
     )
@@ -571,7 +664,6 @@ async def master_wrong_video_format(message: Message):
 # ── Call client ───────────────────────────────────────────────────
 
 @router.callback_query(
-    RoleFilter("master"),
     F.data.startswith("master_call:"),
 )
 async def master_call_client(
@@ -579,7 +671,11 @@ async def master_call_client(
     session: AsyncSession,
 ):
     """Show client phone for master to call."""
-    order_uid = callback.data.split(":")[1]
+    parts = (callback.data or "").split(":", 1)
+    if len(parts) < 2 or not parts[1]:
+        await callback.answer("Xatolik: noto'g'ri buyruq.", show_alert=True)
+        return
+    order_uid = parts[1]
     order, validation_error = await _get_order_for_master(
         session=session,
         order_uid=order_uid,
