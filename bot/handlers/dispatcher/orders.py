@@ -2,6 +2,7 @@
 AutoHelp.uz - Dispatcher Handler
 Handles order management, master assignment, and video confirmations.
 """
+import re
 from html import escape
 
 from aiogram import Router, F, Bot
@@ -38,6 +39,17 @@ from repositories.stats_repo import StatsRepo
 
 router = Router(name="dispatcher")
 ACTIVE_ORDERS_PAGE_SIZE = 8
+_PLACEHOLDER_MASTER_RE = re.compile(r"^\s*master\s+\d+\s*$", re.IGNORECASE)
+
+
+def _display_master_name(master) -> str:
+    """Human-friendly master label for dispatcher-facing texts."""
+    if not master:
+        return "—"
+    raw_name = (master.full_name or "").strip()
+    if raw_name and not _PLACEHOLDER_MASTER_RE.fullmatch(raw_name):
+        return raw_name
+    return f"Usta #{master.id}"
 
 
 def _dispatcher_menu_text() -> str:
@@ -48,7 +60,7 @@ def _order_card_text(order) -> str:
     problem = PROBLEM_LABELS[order.problem_type]["uz"]
     client_name = escape(order.user.full_name) if order.user and order.user.full_name else "—"
     client_phone = escape(order.user.phone) if order.user and order.user.phone else "—"
-    master_name = escape(order.master.full_name) if order.master and order.master.full_name else "—"
+    master_name = escape(_display_master_name(order.master))
     description = escape(order.description) if order.description else "—"
 
     return (
@@ -401,7 +413,7 @@ async def show_active_orders(
         }
         icon = status_icons.get(order.status.value, order.status.value)
         problem = PROBLEM_LABELS[order.problem_type]["uz"]
-        master_name = escape(order.master.full_name) if order.master else "-"
+        master_name = escape(_display_master_name(order.master)) if order.master else "-"
         client_name = escape(order.user.full_name) if order.user else "-"
         lines.append(
             f"{idx}. <code>{order.order_uid}</code> [{icon}]\n"
@@ -453,7 +465,7 @@ async def show_masters_status(
         spec_tag = specialization_short_text(
             spec_map.get(m.id, [])
         )
-        safe_name = escape(m.full_name or "—")
+        safe_name = escape(_display_master_name(m))
         lines.append(
             f"{icon} {safe_name} [{spec_tag}] • ⭐{m.rating:.1f} • "
             f"✅{m.completed_orders} buyurtma"
@@ -637,6 +649,16 @@ async def filter_masters_for_order(
         order.problem_type,
         allow_offline_fallback=True,
     )
+    if not masters:
+        await state.clear()
+        await _safe_edit_text(
+            callback,
+            f"⚠️ Buyurtma <code>{order_uid}</code> uchun hozircha usta yo'q.",
+            parse_mode="HTML",
+            reply_markup=dispatcher_order_navigation(order_uid),
+        )
+        await callback.answer("Hozircha tayinlash uchun usta yo'q.", show_alert=True)
+        return
     spec_map = await master_repo.get_specializations_map([m.id for m in masters])
 
     filtered = []
@@ -650,6 +672,22 @@ async def filter_masters_for_order(
             or MasterSpecializationType.UNIVERSAL in specs
         ):
             filtered.append(master)
+
+    if not filtered:
+        await _render_master_picker(
+            callback=callback,
+            state=state,
+            order_uid=order_uid,
+            masters=masters,
+            master_repo=master_repo,
+            preferred=problem_specialization_priority(order.problem_type.value),
+            title=(
+                f"⚠️ Filtr bo'yicha mos usta topilmadi.\n"
+                f"Buyurtma <code>{order_uid}</code> uchun barcha mavjud ustalar:"
+            ),
+        )
+        await callback.answer("Filtr bo'yicha topilmadi, barcha ustalar ko'rsatildi.")
+        return
 
     preferred = (
         [MasterSpecializationType.UNIVERSAL]
@@ -739,15 +777,24 @@ async def process_master_search(
             [
                 master.full_name or "",
                 master.phone or "",
+                str(master.telegram_id or ""),
+                str(master.id or ""),
             ]
         ).lower()
         if query in haystack:
             matched.append(master)
 
     if not matched:
+        await state.clear()
+        preferred = problem_specialization_priority(order.problem_type.value)
         await message.answer(
-            "Hech narsa topilmadi. Boshqa so'z kiriting yoki 'Hammasi' tugmasini bosing.",
-            reply_markup=dispatcher_order_navigation(order_uid),
+            "⚠️ Hech narsa topilmadi. Barcha mavjud ustalar ro'yxati ko'rsatildi:",
+            reply_markup=master_selection_keyboard(
+                masters,
+                order_uid,
+                specialization_map=spec_map,
+                preferred_specializations=preferred,
+            ),
         )
         return
 
@@ -812,7 +859,7 @@ async def assign_master_to_order(
         return
 
     master = await master_repo.get_by_id(master_id)
-    safe_master_name = escape(master.full_name or "—") if master else "—"
+    safe_master_name = escape(_display_master_name(master)) if master else "—"
     await _safe_edit_text(
         callback,
         f"✅ Buyurtma <code>{order_uid}</code> ga usta tayinlandi: "
@@ -906,7 +953,7 @@ async def auto_assign_master(
         callback,
         f"🤖 Tizim taklifi qabul qilindi!\n\n"
         f"✅ Buyurtma <code>{order_uid}</code>\n"
-        f"👨‍🔧 Usta: <b>{escape(best.full_name or '—')}</b> "
+        f"👨‍🔧 Usta: <b>{escape(_display_master_name(best))}</b> "
         f"[{specialization_short_text(best_specs)}] ⭐{best.rating:.1f}",
         parse_mode="HTML",
         reply_markup=dispatcher_order_actions(order_uid),

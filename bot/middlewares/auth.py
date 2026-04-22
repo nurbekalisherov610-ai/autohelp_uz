@@ -72,6 +72,13 @@ class AuthMiddleware(BaseMiddleware):
 
         return ids
 
+    @staticmethod
+    def _is_placeholder_master_name(value: str | None) -> bool:
+        if not value:
+            return True
+        raw = value.strip().lower()
+        return bool(re.fullmatch(r"master\s+\d+", raw))
+
     async def __call__(
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
@@ -128,6 +135,21 @@ class AuthMiddleware(BaseMiddleware):
             )
         )
         if master:
+            from_user = getattr(event, "from_user", None)
+            if from_user:
+                first = (from_user.first_name or "").strip()
+                last = (from_user.last_name or "").strip()
+                username = (from_user.username or "").strip()
+                base_name = " ".join(part for part in [first, last] if part).strip()
+                if username:
+                    profile_name = f"{base_name} (@{username})" if base_name else f"@{username}"
+                else:
+                    profile_name = base_name
+
+                if profile_name and self._is_placeholder_master_name(master.full_name):
+                    master.full_name = profile_name
+                    await session.flush()
+
             data["user_role"] = "master"
             data["user_data"] = master
             data["user_lang"] = "uz"

@@ -55,6 +55,7 @@ python seed.py
 #   DISPATCHER_IDS=111111111
 #   MASTER_IDS=222222222,333333333
 #   MASTER_ROLES=222222222=battery,electrical;333333333=tire
+#   MASTER_LABELS=222222222=Usta Akbar;333333333=@usta_aziz
 #
 # Option B (manual CLI):
 python manage.py add_dispatcher <TELEGRAM_ID> "Dispatcher Name" "+998901234567"
@@ -187,6 +188,7 @@ python manage.py stats
 | `DISPATCHER_IDS` | Dispatcher Telegram IDs auto-created/updated in DB | empty |
 | `MASTER_IDS` | Master Telegram IDs auto-created/updated in DB | empty |
 | `MASTER_ROLES` | Master specializations map. Example: `856=battery;962=tire` | empty |
+| `MASTER_LABELS` | Optional display names for masters. Example: `856=Usta Akbar;962=@usta_aziz` | empty |
 | `ENV_BOOTSTRAP_ENABLED` | Enables env-to-DB role sync on startup | true |
 | `DISPATCHER_GROUP_ID` | Telegram group chat ID (optional, for hybrid/group mode) | 0 |
 | `DISPATCH_MODE` | Dispatch routing mode: `bot_only` / `hybrid` / `group_only` | hybrid |

@@ -28,6 +28,64 @@ from repositories.stats_repo import StatsRepo
 router = Router(name="master")
 
 
+async def _complete_master_order_with_video(
+    *,
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+    user_data: Master | None,
+    video_file_id: str,
+    video_kind: str,
+) -> None:
+    """Finalize master completion flow with provided video file."""
+    data = await state.get_data()
+    order_uid = data.get("completing_order_uid")
+    amount = data.get("payment_amount", 0)
+
+    if not order_uid:
+        await state.clear()
+        return
+
+    order_service = OrderService(session)
+    try:
+        order = await order_service.complete_order(
+            order_uid=order_uid,
+            amount=amount,
+            master_telegram_id=message.from_user.id,
+            video_file_id=video_file_id,
+        )
+    except ValueError as e:
+        await message.answer(f"⚠️ Xatolik: {e}")
+        await state.clear()
+        return
+
+    master_repo = MasterRepo(session)
+    await master_repo.set_status(message.from_user.id, MasterStatus.ONLINE)
+
+    await state.clear()
+
+    await message.answer(
+        f"✅ <b>Buyurtma yakunlandi!</b>\n\n"
+        f"📋 ID: <code>{order_uid}</code>\n"
+        f"💰 Summa: {amount:,.0f} so'm\n\n"
+        f"Dispetcher tasdiqlanishini kutamiz...",
+        parse_mode="HTML",
+        reply_markup=master_main_menu(True),
+    )
+
+    if order and user_data:
+        notification = NotificationService(bot, session)
+        await notification.send_master_video_to_channel(
+            order,
+            user_data,
+            video_file_id,
+            amount,
+            video_kind=video_kind,
+        )
+        await notification.notify_dispatcher_awaiting_confirm(order, amount)
+
+
 # ── Master /start ─────────────────────────────────────────────────
 
 @router.message(RoleFilter("master"), F.text == "/start")
@@ -359,61 +417,50 @@ async def process_master_video(
         )
         return
 
-    data = await state.get_data()
-    order_uid = data.get("completing_order_uid")
-    amount = data.get("payment_amount", 0)
-
-    if not order_uid:
-        await state.clear()
-        return
-
-    video_file_id = message.video_note.file_id
-
-    # Complete order
-    order_service = OrderService(session)
-    try:
-        order = await order_service.complete_order(
-            order_uid=order_uid,
-            amount=amount,
-            master_telegram_id=message.from_user.id,
-            video_file_id=video_file_id,
-        )
-    except ValueError as e:
-        await message.answer(f"⚠️ Xatolik: {e}")
-        await state.clear()
-        return
-
-    # Set master back to online
-    master_repo = MasterRepo(session)
-    await master_repo.set_status(message.from_user.id, MasterStatus.ONLINE)
-
-    await state.clear()
-
-    await message.answer(
-        f"✅ <b>Buyurtma yakunlandi!</b>\n\n"
-        f"📋 ID: <code>{order_uid}</code>\n"
-        f"💰 Summa: {amount:,.0f} so'm\n\n"
-        f"Dispetcher tasdiqlanishini kutamiz...",
-        parse_mode="HTML",
-        reply_markup=master_main_menu(True),
+    await _complete_master_order_with_video(
+        message=message,
+        state=state,
+        session=session,
+        bot=bot,
+        user_data=user_data,
+        video_file_id=message.video_note.file_id,
+        video_kind="video_note",
     )
 
-    # Post video to channel
-    if order and user_data:
-        notification = NotificationService(bot, session)
-        await notification.send_master_video_to_channel(
-            order, user_data, video_file_id, amount
+
+@router.message(MasterOrderStates.recording_video, F.video)
+async def process_master_video_file(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+    user_data: Master | None = None,
+):
+    """Handle regular video completion proof as fallback."""
+    duration = int(getattr(message.video, "duration", 0) or 0)
+    if duration > 15:
+        await message.answer(
+            "⚠️ Iltimos, yakunlash videosi 15 soniyadan oshmasin.\n"
+            "Qisqa (0-15 soniya) video yuboring.",
         )
-        # Notify dispatcher to confirm
-        await notification.notify_dispatcher_awaiting_confirm(order, amount)
+        return
+
+    await _complete_master_order_with_video(
+        message=message,
+        state=state,
+        session=session,
+        bot=bot,
+        user_data=user_data,
+        video_file_id=message.video.file_id,
+        video_kind="video",
+    )
 
 
-@router.message(MasterOrderStates.recording_video, ~F.video_note)
+@router.message(MasterOrderStates.recording_video, ~(F.video_note | F.video))
 async def master_wrong_video_format(message: Message):
     """Handle non-video_note in video state."""
     await message.answer(
-        "⚠️ Iltimos, <b>dumaloq video</b> (video xabar) yuboring!\n"
-        "Telegram kamerasini oching va dumaloq videoni yozib yuboring.",
+        "⚠️ Iltimos, <b>dumaloq video</b> yoki oddiy <b>video</b> yuboring (15 soniyagacha).",
         parse_mode="HTML",
     )
 

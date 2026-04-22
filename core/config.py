@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     dispatcher_ids: Annotated[List[int], NoDecode] = []
     master_ids: Annotated[List[int], NoDecode] = []
     master_roles: str = ""
+    master_labels: str = ""
     env_bootstrap_enabled: bool = True
     dispatcher_group_id: int = 0
     dispatch_mode: Literal["bot_only", "hybrid", "group_only"] = "bot_only"

@@ -2,6 +2,8 @@
 AutoHelp.uz - Dispatcher Keyboards
 Inline keyboards for the dispatcher interface.
 """
+import re
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from models.master import Master
@@ -9,6 +11,18 @@ from models.master_specialization import (
     MasterSpecializationType,
     specialization_short_text,
 )
+
+
+_PLACEHOLDER_MASTER_RE = re.compile(r"^\s*master\s+\d+\s*$", re.IGNORECASE)
+
+
+def _master_display_name(master: Master) -> str:
+    """Render dispatcher-friendly master label without long raw IDs."""
+    raw_name = (master.full_name or "").strip()
+    if raw_name and not _PLACEHOLDER_MASTER_RE.fullmatch(raw_name):
+        return raw_name
+    # Fallback for env-bootstrapped placeholders until master opens the bot.
+    return f"Usta #{master.id}"
 
 
 def _master_filter_rows(order_uid: str) -> list[list[InlineKeyboardButton]]:
@@ -76,7 +90,7 @@ def master_selection_keyboard(
         specs = specialization_map.get(m.id, [MasterSpecializationType.UNIVERSAL])
         spec_tag = specialization_short_text(specs)
         pin = "🎯 " if any(spec in preferred for spec in specs) else ""
-        label = f"{pin}{status_icon} {m.full_name} [{spec_tag}] ⭐{m.rating:.1f}"
+        label = f"{pin}{status_icon} {_master_display_name(m)} [{spec_tag}] ⭐{m.rating:.1f}"
         buttons.append([InlineKeyboardButton(
             text=label,
             callback_data=f"assign:{order_uid}:{m.id}"

@@ -96,6 +96,54 @@ def _parse_master_roles(raw: str) -> dict[int, list[MasterSpecializationType]]:
     return role_map
 
 
+def _parse_master_labels(raw: str) -> dict[int, str]:
+    """
+    Parse MASTER_LABELS from env.
+
+    Supported formats:
+    - JSON object:
+      {"8562893513":"Ali Usta","962386916":"@usta_aziz"}
+    - key/value string:
+      8562893513=Ali Usta;962386916=@usta_aziz
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+
+    label_map: dict[int, str] = {}
+
+    if raw.startswith("{") and raw.endswith("}"):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                for key, value in parsed.items():
+                    try:
+                        tid = int(str(key).strip())
+                    except (TypeError, ValueError):
+                        continue
+                    label = str(value or "").strip()
+                    if label:
+                        label_map[tid] = label
+                return label_map
+        except Exception:
+            pass
+
+    parts = [p.strip() for p in re.split(r"[;\n]+", raw) if p.strip()]
+    for part in parts:
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        try:
+            tid = int(key.strip())
+        except ValueError:
+            continue
+        label = value.strip()
+        if label:
+            label_map[tid] = label
+
+    return label_map
+
+
 async def _upsert_staff(session: AsyncSession, telegram_id: int, target_role: StaffRole) -> str:
     staff = await session.scalar(
         select(Staff).where(Staff.telegram_id == telegram_id)
@@ -142,6 +190,7 @@ async def sync_roles_from_env() -> dict[str, int]:
         "master_created": 0,
         "master_updated": 0,
         "master_roles_applied": 0,
+        "master_labels_applied": 0,
     }
 
     if not settings.env_bootstrap_enabled:
@@ -153,6 +202,7 @@ async def sync_roles_from_env() -> dict[str, int]:
     dispatcher_ids = _unique_ids(settings.dispatcher_ids)
     master_ids = _unique_ids(settings.master_ids)
     master_roles = _parse_master_roles(settings.master_roles)
+    master_labels = _parse_master_labels(settings.master_labels)
 
     async with async_session() as session:
         for tid in super_admin_ids:
@@ -167,13 +217,13 @@ async def sync_roles_from_env() -> dict[str, int]:
             action = await _upsert_staff(session, tid, StaffRole.DISPATCHER)
             summary[f"dispatcher_{action}"] += 1
 
-        if not master_ids and not master_roles:
+        if not master_ids and not master_roles and not master_labels:
             await session.commit()
             logger.info(f"Env role bootstrap summary: {summary}")
             return summary
 
         master_repo = MasterRepo(session)
-        ids_to_process = _unique_ids(master_ids, master_roles.keys())
+        ids_to_process = _unique_ids(master_ids, master_roles.keys(), master_labels.keys())
 
         for tid in ids_to_process:
             master = await session.scalar(
@@ -181,9 +231,10 @@ async def sync_roles_from_env() -> dict[str, int]:
             )
             created = False
             if not master:
+                label = master_labels.get(tid)
                 master = Master(
                     telegram_id=tid,
-                    full_name=f"Master {tid}",
+                    full_name=label or f"Master {tid}",
                     phone="not_set",
                     status=MasterStatus.OFFLINE,
                     is_active=True,
@@ -192,9 +243,15 @@ async def sync_roles_from_env() -> dict[str, int]:
                 await session.flush()
                 created = True
                 summary["master_created"] += 1
+                if label:
+                    summary["master_labels_applied"] += 1
             else:
+                label = master_labels.get(tid)
                 master.is_active = True
-                if not (master.full_name or "").strip():
+                if label:
+                    master.full_name = label
+                    summary["master_labels_applied"] += 1
+                elif not (master.full_name or "").strip():
                     master.full_name = f"Master {tid}"
                 if not (master.phone or "").strip():
                     master.phone = "not_set"

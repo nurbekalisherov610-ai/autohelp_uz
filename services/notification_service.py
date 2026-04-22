@@ -346,7 +346,12 @@ class NotificationService:
             logger.error(f"Failed to send video to client: {e}")
 
     async def send_master_video_to_channel(
-        self, order: Order, master: Master, video_file_id: str, amount: float
+        self,
+        order: Order,
+        master: Master,
+        video_file_id: str,
+        amount: float,
+        video_kind: str = "video_note",
     ) -> None:
         """Post master's completion video to the verification channel."""
         if not settings.video_channel_id:
@@ -361,10 +366,16 @@ class NotificationService:
         )
 
         try:
-            await self.bot.send_video_note(
-                chat_id=settings.video_channel_id,
-                video_note=video_file_id,
-            )
+            if video_kind == "video":
+                await self.bot.send_video(
+                    chat_id=settings.video_channel_id,
+                    video=video_file_id,
+                )
+            else:
+                await self.bot.send_video_note(
+                    chat_id=settings.video_channel_id,
+                    video_note=video_file_id,
+                )
             await self.bot.send_message(
                 chat_id=settings.video_channel_id,
                 text=caption,
