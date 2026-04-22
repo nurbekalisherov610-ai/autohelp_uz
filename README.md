@@ -208,6 +208,7 @@ python manage.py stats
 | `SLA_ON_THE_WAY_TIMEOUT` | Minutes before travel alert | 60 |
 | `SLA_CONFIRM_TIMEOUT` | Minutes before confirmation alert | 15 |
 | `SLA_ALERT_COOLDOWN_MINUTES` | Minimum minutes between repeated SLA alerts for the same order | 30 |
+| `SLA_ALERT_MAX_PER_ORDER_STAGE` | Hard cap of SLA warnings per order stage (`assign/on_the_way/confirm`) | 1 |
 
 Recommended for one dispatcher with group backup: set `DISPATCH_MODE=hybrid`.
 

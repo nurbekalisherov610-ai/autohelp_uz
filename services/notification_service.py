@@ -28,6 +28,7 @@ from core.redis import get_redis
 class NotificationService:
     """Handles all notification logic for the bot."""
     _sla_alert_local_cache: dict[str, float] = {}
+    _sla_alert_local_counts: dict[str, int] = {}
 
     def __init__(self, bot: Bot, session: AsyncSession):
         self.bot = bot
@@ -43,11 +44,18 @@ class NotificationService:
         Redis is primary storage; in-memory fallback is used if Redis fails.
         """
         cooldown_seconds = max(60, settings.sla_alert_cooldown_minutes * 60)
+        max_alerts = max(1, int(settings.sla_alert_max_per_order_stage))
         cache_key = f"sla_alert:{alert_key}:{order_uid}"
+        count_key = f"{cache_key}:count"
 
         if settings.use_redis:
             try:
                 redis = await get_redis()
+                count_raw = await redis.get(count_key)
+                sent_count = int(count_raw) if count_raw else 0
+                if sent_count >= max_alerts:
+                    return False
+
                 was_set = await redis.set(
                     cache_key,
                     "1",
@@ -61,6 +69,9 @@ class NotificationService:
                 )
 
         now = time.monotonic()
+        sent_count = int(self._sla_alert_local_counts.get(count_key, 0))
+        if sent_count >= max_alerts:
+            return False
         expires_at = self._sla_alert_local_cache.get(cache_key, 0.0)
         if expires_at > now:
             return False
@@ -78,6 +89,41 @@ class NotificationService:
                 self._sla_alert_local_cache.pop(key, None)
 
         return True
+
+    async def _mark_sla_alert_sent(
+        self,
+        order_uid: str,
+        alert_key: str,
+    ) -> None:
+        """Persist SLA alert delivery count for hard cap enforcement."""
+        cooldown_seconds = max(60, settings.sla_alert_cooldown_minutes * 60)
+        cache_key = f"sla_alert:{alert_key}:{order_uid}"
+        count_key = f"{cache_key}:count"
+
+        if settings.use_redis:
+            try:
+                redis = await get_redis()
+                new_count = await redis.incr(count_key)
+                # Keep count for a long enough period to avoid re-spam during the same stuck stage.
+                if int(new_count) == 1:
+                    await redis.expire(count_key, max(cooldown_seconds * 10, 86400))
+            except Exception as e:
+                logger.warning(
+                    f"SLA alert redis count update failed, using memory fallback for {order_uid}: {e}"
+                )
+
+        current = int(self._sla_alert_local_counts.get(count_key, 0))
+        self._sla_alert_local_counts[count_key] = current + 1
+
+        if len(self._sla_alert_local_counts) > 2000:
+            # Keep only currently known keys from cooldown cache when map grows too much.
+            active_prefixes = set(self._sla_alert_local_cache.keys())
+            stale_count_keys = [
+                key for key in self._sla_alert_local_counts.keys()
+                if key.removesuffix(":count") not in active_prefixes
+            ]
+            for key in stale_count_keys[:500]:
+                self._sla_alert_local_counts.pop(key, None)
 
     async def _send_order_notification_packet(
         self,
@@ -467,21 +513,21 @@ class NotificationService:
             f"Awaiting-confirm alert sent to {sent} destination(s) for order {order.order_uid}."
         )
 
-    async def send_sla_alert(self, order: Order, alert_key: str) -> None:
+    async def send_sla_alert(self, order: Order, alert_key: str) -> bool:
         """Send SLA violation alert to dispatchers."""
         try:
             action_chat_ids = await self._get_dispatcher_action_chat_ids()
             mirror_chat_ids = await self._get_dispatcher_mirror_chat_ids()
         except Exception as e:
             logger.error(f"Failed to resolve dispatcher destinations: {e}")
-            return
+            return False
 
         destination_ids = list(dict.fromkeys(action_chat_ids + mirror_chat_ids))
         if not destination_ids:
             logger.warning(
                 f"No dispatcher destination configured for SLA alert on order {order.order_uid}."
             )
-            return
+            return False
 
         should_send = await self._should_send_sla_alert(
             order_uid=order.order_uid,
@@ -491,7 +537,7 @@ class NotificationService:
             logger.debug(
                 f"SLA alert suppressed by cooldown for {order.order_uid} ({alert_key})."
             )
-            return
+            return False
 
         text = t(alert_key, lang="uz", order_uid=order.order_uid)
         tasks = [
@@ -500,9 +546,12 @@ class NotificationService:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=False)
         sent = sum(1 for x in results if x)
+        if sent > 0:
+            await self._mark_sla_alert_sent(order_uid=order.order_uid, alert_key=alert_key)
         logger.info(
             f"SLA alert sent to {sent} destination(s) for order {order.order_uid}."
         )
+        return sent > 0
 
     async def notify_dispatcher_review_feedback(
         self,
