@@ -407,11 +407,6 @@ async def confirm_order(
     )
 
     await callback.message.edit_text(success, parse_mode="HTML")
-    await callback.message.answer(
-        t("main_menu", user_lang),
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard(user_lang),
-    )
 
     # Notify dispatchers
     notification = NotificationService(bot, session)
