@@ -28,6 +28,32 @@ from repositories.stats_repo import StatsRepo
 router = Router(name="master")
 
 
+def _master_keyboard_status_key(status: OrderStatus | None) -> str | None:
+    """Map persisted order status to the keyboard flow key."""
+    mapping = {
+        OrderStatus.ACCEPTED: "accepted",
+        OrderStatus.ON_THE_WAY: "on_the_way",
+        OrderStatus.ARRIVED: "arrived",
+        OrderStatus.IN_PROGRESS: "in_progress",
+    }
+    return mapping.get(status)
+
+
+async def _get_order_for_master(
+    *,
+    session: AsyncSession,
+    order_uid: str,
+    master_telegram_id: int,
+):
+    """Load order and ensure it belongs to the current master."""
+    order = await OrderRepo(session).get_by_uid(order_uid)
+    if not order:
+        return None, "Buyurtma topilmadi."
+    if not order.master or order.master.telegram_id != master_telegram_id:
+        return None, "Bu buyurtma sizga biriktirilmagan."
+    return order, None
+
+
 async def _complete_master_order_with_video(
     *,
     message: Message,
@@ -200,6 +226,15 @@ async def accept_order(
 ):
     """Master accepts an order."""
     order_uid = callback.data.split(":")[1]
+    _, validation_error = await _get_order_for_master(
+        session=session,
+        order_uid=order_uid,
+        master_telegram_id=callback.from_user.id,
+    )
+    if validation_error:
+        await callback.answer(validation_error, show_alert=True)
+        return
+
     order_service = OrderService(session)
 
     try:
@@ -244,6 +279,15 @@ async def reject_order(
 ):
     """Master rejects an order."""
     order_uid = callback.data.split(":")[1]
+    _, validation_error = await _get_order_for_master(
+        session=session,
+        order_uid=order_uid,
+        master_telegram_id=callback.from_user.id,
+    )
+    if validation_error:
+        await callback.answer(validation_error, show_alert=True)
+        return
+
     order_service = OrderService(session)
 
     try:
@@ -285,6 +329,9 @@ async def update_order_status(
 ):
     """Handle progressive status updates from master."""
     parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer("Xatolik: noto'g'ri buyruq.", show_alert=True)
+        return
     order_uid = parts[1]
     new_status_str = parts[2]
 
@@ -299,10 +346,37 @@ async def update_order_status(
         await callback.answer("Xatolik", show_alert=True)
         return
 
+    order, validation_error = await _get_order_for_master(
+        session=session,
+        order_uid=order_uid,
+        master_telegram_id=callback.from_user.id,
+    )
+    if validation_error:
+        await callback.answer(validation_error, show_alert=True)
+        return
+
     order_service = OrderService(session)
 
     # Special flow for "completed" — need amount + video
     if new_status == OrderStatus.AWAITING_CONFIRM:
+        if order.status != OrderStatus.IN_PROGRESS:
+            status_key = _master_keyboard_status_key(order.status)
+            if status_key:
+                await callback.message.edit_text(
+                    f"ℹ️ Buyurtma holati: <b>{order.status.value}</b>\n\n"
+                    "Iltimos, navbatdagi to'g'ri bosqichni bosing.",
+                    parse_mode="HTML",
+                    reply_markup=master_status_update_keyboard(order_uid, status_key),
+                )
+                await callback.answer("Status yangilandi, keyingi bosqichni bosing.")
+                return
+
+            await callback.answer(
+                f"Buyurtma hozir {order.status.value} holatida. Avval IN_PROGRESS bo'lishi kerak.",
+                show_alert=True,
+            )
+            return
+
         await state.update_data(completing_order_uid=order_uid)
         await state.set_state(MasterOrderStates.entering_amount)
         await callback.message.edit_text(
@@ -320,6 +394,18 @@ async def update_order_status(
             changed_by_role="master",
         )
     except ValueError as e:
+        fresh_order = await OrderRepo(session).get_by_uid(order_uid)
+        status_key = _master_keyboard_status_key(fresh_order.status) if fresh_order else None
+        if status_key:
+            await callback.message.edit_text(
+                f"ℹ️ Buyurtma holati yangilanibdi: <b>{fresh_order.status.value}</b>\n\n"
+                "Iltimos, navbatdagi bosqichni davom ettiring.",
+                parse_mode="HTML",
+                reply_markup=master_status_update_keyboard(order_uid, status_key),
+            )
+            await callback.answer("Holat yangilandi, keyingi tugma ko'rsatildi.")
+            return
+
         await callback.answer(str(e), show_alert=True)
         return
 
@@ -383,12 +469,29 @@ async def process_payment_amount(
 async def request_amount_from_button(
     callback: CallbackQuery,
     state: FSMContext,
+    session: AsyncSession,
 ):
     """
     Legacy/compatibility handler:
     Some keyboards still emit master_amount:<order_uid>.
     """
     order_uid = callback.data.split(":")[1]
+    order, validation_error = await _get_order_for_master(
+        session=session,
+        order_uid=order_uid,
+        master_telegram_id=callback.from_user.id,
+    )
+    if validation_error:
+        await callback.answer(validation_error, show_alert=True)
+        return
+
+    if order.status != OrderStatus.IN_PROGRESS:
+        await callback.answer(
+            f"Bu tugma hozir ishlamaydi. Joriy holat: {order.status.value}",
+            show_alert=True,
+        )
+        return
+
     await state.update_data(completing_order_uid=order_uid)
     await state.set_state(MasterOrderStates.entering_amount)
     await callback.message.edit_text(
@@ -477,8 +580,14 @@ async def master_call_client(
 ):
     """Show client phone for master to call."""
     order_uid = callback.data.split(":")[1]
-    order_repo = OrderRepo(session)
-    order = await order_repo.get_by_uid(order_uid)
+    order, validation_error = await _get_order_for_master(
+        session=session,
+        order_uid=order_uid,
+        master_telegram_id=callback.from_user.id,
+    )
+    if validation_error:
+        await callback.answer(validation_error, show_alert=True)
+        return
 
     if not order or not order.user:
         await callback.answer("Ma'lumot topilmadi", show_alert=True)
