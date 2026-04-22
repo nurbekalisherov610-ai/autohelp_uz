@@ -1136,18 +1136,26 @@ async def confirm_order_completion(
         await notification.notify_client_status_update(
             order, "status_completed", amount=f"{amount:,.0f}"
         )
-        # Send rating keyboard
+        # Send rating keyboard (must never break completion transaction).
         rate_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text="⭐ Baholash",
                 callback_data=f"rate_order:{order_uid}",
             )]
         ])
-        await bot.send_message(
-            chat_id=order.user.telegram_id,
-            text="⭐ Xizmatni baholang:",
-            reply_markup=rate_kb,
-        )
+        user_lang = getattr(order.user.language, "value", "uz")
+        rate_text = "⭐ Xizmatni baholang:" if user_lang == "uz" else "⭐ Оцените сервис:"
+        try:
+            await bot.send_message(
+                chat_id=order.user.telegram_id,
+                text=rate_text,
+                reply_markup=rate_kb,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to send rating prompt to client {order.user.telegram_id} "
+                f"for order {order_uid}: {e}"
+            )
 
     await callback.answer()
 
