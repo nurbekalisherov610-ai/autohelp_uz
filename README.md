@@ -194,7 +194,7 @@ python manage.py stats
 | `DISPATCHER_CONFIRM_VIDEO_UZ` | Uzbek auto-confirmation video `file_id` sent to client after new order | empty |
 | `DISPATCHER_CONFIRM_VIDEO_RU` | Russian auto-confirmation video `file_id` sent to client after new order | empty |
 | `DISPATCHER_CONFIRM_VIDEO_KIND` | Media type for those file IDs: `video_note` or `video` | video_note |
-| `DISPATCHER_AUTO_VIDEO_DELAY_SECONDS` | Delay before auto-sending confirmation video after order creation | 25 |
+| `DISPATCHER_AUTO_VIDEO_DELAY_SECONDS` | Delay before auto-sending confirmation video after order creation | 15 |
 | `DB_HOST` | PostgreSQL host | localhost |
 | `DB_PORT` | PostgreSQL port | 5432 |
 | `DB_NAME` | Database name | autohelp |
