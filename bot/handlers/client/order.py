@@ -205,6 +205,29 @@ async def process_problem_type(
         )
 
 
+@router.message(OrderCreationStates.entering_description, F.text.in_(["❌ Bekor qilish", "❌ Отменить"]))
+@router.message(OrderCreationStates.sharing_location, F.text.in_(["❌ Bekor qilish", "❌ Отменить"]))
+async def cancel_order_draft(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    user_lang: str = "uz",
+):
+    """Handle explicit cancellation during order creation steps."""
+    await state.clear()
+    await _clear_order_draft(session, message.from_user.id)
+    cancelled = (
+        "❌ Buyurtma yaratish bekor qilindi.\n\nAsosiy menyu:"
+        if user_lang == "uz" else
+        "❌ Создание заявки отменено.\n\nГлавное меню:"
+    )
+    await message.answer(
+        cancelled,
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard(user_lang),
+    )
+
+
 # ── Step 2: Description (REQUIRED for OTHER, collected then go to location) ─
 
 @router.message(OrderCreationStates.entering_description, F.text)
@@ -447,6 +470,7 @@ async def cancel_order_creation(
 async def cancel_active_order(
     callback: CallbackQuery,
     session: AsyncSession,
+    bot: Bot,
     user_data: User | None = None,
     user_lang: str = "uz",
 ):
@@ -456,8 +480,11 @@ async def cancel_active_order(
         return
 
     order_uid = callback.data.split(":")[1]
-    order_service = OrderService(session)
+    
+    order_repo = OrderRepo(session)
+    order_before = await order_repo.get_by_uid(order_uid)
 
+    order_service = OrderService(session)
     try:
         await order_service.cancel_order(
             order_uid=order_uid,
@@ -471,9 +498,47 @@ async def cancel_active_order(
         )
         await callback.message.edit_text(cancelled, parse_mode="HTML")
         await _clear_order_draft(session, callback.from_user.id)
+        
+        # Free the master if one was assigned
+        if order_before and order_before.master_id:
+            from repositories.master_repo import MasterRepo
+            from models.master import MasterStatus
+            master_repo = MasterRepo(session)
+            await master_repo.set_status(order_before.master.telegram_id, MasterStatus.ONLINE)
+
     except ValueError as e:
         await callback.answer(str(e), show_alert=True)
         return
+
+    # Notify Dispatcher and Master
+    if order_before:
+        notification = NotificationService(bot, session)
+        try:
+            action_chat_ids = await notification._get_dispatcher_action_chat_ids()
+            for chat_id in action_chat_ids:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ <b>Mijoz buyurtmani bekor qildi!</b>\n\n"
+                         f"📋 Buyurtma: <code>{order_uid}</code>\n"
+                         f"Mijoz: {escape(order_before.user.full_name)}",
+                    parse_mode="HTML",
+                )
+        except Exception:
+            pass
+
+        if order_before.master:
+            try:
+                from bot.keyboards.master_kb import master_main_menu
+                await bot.send_message(
+                    chat_id=order_before.master.telegram_id,
+                    text=f"❌ <b>Diqqat! Mijoz buyurtmani bekor qildi.</b>\n\n"
+                         f"📋 Buyurtma: <code>{order_uid}</code>\n"
+                         f"Siz endi bo'shsiz.",
+                    parse_mode="HTML",
+                    reply_markup=master_main_menu(True),
+                )
+            except Exception:
+                pass
 
     await callback.answer()
 

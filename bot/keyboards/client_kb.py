@@ -81,9 +81,11 @@ def skip_keyboard(lang: str = "uz") -> InlineKeyboardMarkup:
 def share_location_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
     """Share location keyboard."""
     texts = {"uz": "📍 Joylashuvni yuborish", "ru": "📍 Отправить геолокацию"}
+    cancel = {"uz": "❌ Bekor qilish", "ru": "❌ Отменить"}
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=texts.get(lang, texts["uz"]), request_location=True)]
+            [KeyboardButton(text=texts.get(lang, texts["uz"]), request_location=True)],
+            [KeyboardButton(text=cancel.get(lang, cancel["uz"]))],
         ],
         is_persistent=False,
         resize_keyboard=True,
