@@ -13,6 +13,7 @@ def master_main_menu(is_online: bool = False) -> ReplyKeyboardMarkup:
     toggle_text = "🔴 Offline bo'lish" if is_online else "🟢 Online bo'lish"
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="⚡ Faol buyurtma")],
             [KeyboardButton(text=toggle_text)],
             [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="⭐ Reytingim")],
         ],

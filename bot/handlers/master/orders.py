@@ -198,6 +198,68 @@ async def toggle_availability(
     )
 
 
+# ── Active Order ──────────────────────────────────────────
+
+@router.message(
+    RoleFilter("master"),
+    F.text == "⚡ Faol buyurtma",
+)
+async def master_active_order(
+    message: Message,
+    session: AsyncSession,
+):
+    """Show the master's current active order."""
+    order_repo = OrderRepo(session)
+    # Active orders for a master are those not completed/cancelled, where they are assigned.
+    active_orders = await order_repo.get_orders_by_status(
+        [
+            OrderStatus.ASSIGNED,
+            OrderStatus.ON_THE_WAY,
+            OrderStatus.ARRIVED,
+            OrderStatus.IN_PROGRESS,
+            OrderStatus.AWAITING_CONFIRMATION,
+        ]
+    )
+    # Filter for this master
+    my_active = [o for o in active_orders if o.master_telegram_id == message.from_user.id]
+
+    if not my_active:
+        await message.answer("Sizda ayni paytda faol buyurtma yo'q.")
+        return
+
+    order = my_active[0]
+    
+    # Format the message
+    from bot.handlers.dispatcher.orders import _format_order_text
+    text = _format_order_text(order, "uz")
+
+    # If awaiting confirmation, just show that it's waiting
+    if order.status == OrderStatus.AWAITING_CONFIRMATION:
+        await message.answer(
+            f"Sizning faol buyurtmangiz:\n\n{text}\n\n"
+            f"⏳ <b>Tasdiqlash kutilmoqda.</b> Dispetcher siz kiritgan summani ({order.payment_amount:,.0f} so'm) va videoni tekshirmoqda.",
+            parse_mode="HTML"
+        )
+        return
+
+    # If just assigned, show accept/reject
+    if order.status == OrderStatus.ASSIGNED:
+        await message.answer(
+            f"Sizning faol buyurtmangiz:\n\n{text}",
+            parse_mode="HTML",
+            reply_markup=master_order_response(order.uid)
+        )
+        return
+
+    # Otherwise, show status update keyboard
+    await message.answer(
+        f"Sizning faol buyurtmangiz:\n\n{text}",
+        parse_mode="HTML",
+        reply_markup=master_status_update_keyboard(order.uid, order.status.value)
+    )
+
+
+
 # ── Statistics ────────────────────────────────────────────────────
 
 @router.message(RoleFilter("master"), F.text == "📊 Statistika")
