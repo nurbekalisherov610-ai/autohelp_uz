@@ -8,6 +8,8 @@ from html import escape
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import any_state
+from aiogram.filters import StateFilter
 from aiogram.exceptions import TelegramBadRequest
 from loguru import logger
 from sqlalchemy import update
@@ -260,9 +262,11 @@ async def _render_master_picker(
 @router.message(
     RoleFilter("dispatcher", "admin", "super_admin"),
     F.text == "/start",
+    StateFilter(any_state),
 )
-async def dispatcher_start(message: Message):
+async def dispatcher_start(message: Message, state: FSMContext):
     """Dispatcher main menu."""
+    await state.clear()
     await message.answer(
         _dispatcher_menu_text(),
         parse_mode="HTML",

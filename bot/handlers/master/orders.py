@@ -9,6 +9,8 @@ from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import StateFilter
+from aiogram.fsm.state import any_state
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.filters.role_filter import RoleFilter
@@ -156,12 +158,14 @@ async def _complete_master_order_with_video(
 
 # ── Master /start ─────────────────────────────────────────────────
 
-@router.message(RoleFilter("master"), F.text == "/start")
+@router.message(RoleFilter("master"), F.text == "/start", StateFilter(any_state))
 async def master_start(
     message: Message,
+    state: FSMContext,
     user_data: Master | None = None,
 ):
-    """Master main menu."""
+    """Show master dashboard."""
+    await state.clear()
     is_online = user_data.status == MasterStatus.ONLINE if user_data else False
     status_icon = "🟢" if is_online else "🔴"
     status_text = "Online (Buyurtmaga tayyor)" if is_online else "Offline (Dam olishda)"
@@ -187,9 +191,11 @@ async def master_start(
 @router.message(
     RoleFilter("master"),
     F.text.in_(["🟢 Online bo'lish", "🔴 Offline bo'lish"]),
+    StateFilter(any_state),
 )
 async def toggle_availability(
     message: Message,
+    state: FSMContext,
     session: AsyncSession,
     user_data: Master | None = None,
 ):
@@ -197,6 +203,7 @@ async def toggle_availability(
     if not user_data:
         return
 
+    await state.clear()
     master_repo = MasterRepo(session)
     new_status = await master_repo.toggle_status(message.from_user.id)
 
@@ -214,13 +221,16 @@ async def toggle_availability(
 @router.message(
     RoleFilter("master"),
     F.text == "⚡ Faol buyurtma",
+    StateFilter(any_state),
 )
 async def master_active_order(
     message: Message,
+    state: FSMContext,
     session: AsyncSession,
     bot: Bot,
 ):
     """Show the master's current active order."""
+    await state.clear()
     order_repo = OrderRepo(session)
     # Active orders for a master are those not completed/cancelled, where they are assigned.
     active_orders = await order_repo.get_orders_by_status(
@@ -281,13 +291,15 @@ async def master_active_order(
 
 # ── Statistics ────────────────────────────────────────────────────
 
-@router.message(RoleFilter("master"), F.text == "📊 Statistika")
+@router.message(RoleFilter("master"), F.text == "📊 Statistika", StateFilter(any_state))
 async def master_stats(
     message: Message,
+    state: FSMContext,
     session: AsyncSession,
     user_data: Master | None = None,
 ):
     """Show master's personal statistics."""
+    await state.clear()
     if not user_data:
         return
 
@@ -316,12 +328,15 @@ async def master_stats(
     )
 
 
-@router.message(RoleFilter("master"), F.text == "⭐ Reytingim")
+@router.message(RoleFilter("master"), F.text == "⭐ Reytingim", StateFilter(any_state))
 async def master_rating(
     message: Message,
+    state: FSMContext,
+    session: AsyncSession,
     user_data: Master | None = None,
 ):
-    """Show master's rating."""
+    """Show master's personal rating."""
+    await state.clear()
     if not user_data:
         return
 
