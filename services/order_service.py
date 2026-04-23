@@ -146,11 +146,11 @@ class OrderService:
                 OrderStatus.ACCEPTED, OrderStatus.REJECTED, OrderStatus.CANCELLED
             ],
             OrderStatus.ACCEPTED: [OrderStatus.ON_THE_WAY, OrderStatus.CANCELLED],
-            OrderStatus.ON_THE_WAY: [OrderStatus.ARRIVED],
-            OrderStatus.ARRIVED: [OrderStatus.IN_PROGRESS],
-            OrderStatus.IN_PROGRESS: [OrderStatus.COMPLETED, OrderStatus.AWAITING_CONFIRM],
-            OrderStatus.AWAITING_CONFIRM: [OrderStatus.COMPLETED],
-            OrderStatus.REJECTED: [OrderStatus.ASSIGNED],
+            OrderStatus.ON_THE_WAY: [OrderStatus.ARRIVED, OrderStatus.CANCELLED],
+            OrderStatus.ARRIVED: [OrderStatus.IN_PROGRESS, OrderStatus.CANCELLED],
+            OrderStatus.IN_PROGRESS: [OrderStatus.COMPLETED, OrderStatus.AWAITING_CONFIRM, OrderStatus.CANCELLED],
+            OrderStatus.AWAITING_CONFIRM: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+            OrderStatus.REJECTED: [OrderStatus.ASSIGNED, OrderStatus.CANCELLED],
         }
 
         allowed = valid_transitions.get(order.status, [])

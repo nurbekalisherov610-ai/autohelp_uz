@@ -727,8 +727,15 @@ async def request_amount_from_button(
 
     await state.update_data(completing_order_uid=order_uid)
     await state.set_state(MasterOrderStates.recording_video)
-    await _safe_master_edit_text(
-        callback,
+    
+    # Remove keyboard to prevent double clicks
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Send video prompt as a NEW message
+    await callback.message.answer(
         t("master_video_prompt", "uz"),
         parse_mode="HTML",
     )
@@ -863,3 +870,88 @@ async def master_call_client(
             pass
 
     await callback.answer()
+
+
+# ── Cancel Order (Master Edge Case) ───────────────────────────────
+
+@router.callback_query(
+    F.data.startswith("master_cancel:"),
+)
+async def master_cancel_order(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+):
+    """Allow master to cancel an order if they cannot complete it."""
+    parts = (callback.data or "").split(":", 1)
+    if len(parts) < 2 or not parts[1]:
+        await callback.answer("Xatolik", show_alert=True)
+        return
+    
+    order_uid = parts[1]
+    order, validation_error = await _get_order_for_master(
+        session=session,
+        order_uid=order_uid,
+        master_telegram_id=callback.from_user.id,
+    )
+    if validation_error:
+        await callback.answer(validation_error, show_alert=True)
+        return
+
+    order_service = OrderService(session)
+    try:
+        order = await order_service.cancel_order(
+            order_uid=order_uid,
+            cancelled_by_telegram_id=callback.from_user.id,
+            cancelled_by_role="master",
+        )
+    except ValueError as e:
+        await callback.answer(str(e), show_alert=True)
+        return
+
+    # Free the master
+    master_repo = MasterRepo(session)
+    await master_repo.set_status(callback.from_user.id, MasterStatus.ONLINE)
+
+    await state.clear()
+    
+    # Notify Master
+    await _safe_master_edit_text(
+        callback,
+        f"❌ Buyurtma <code>{order_uid}</code> bekor qilindi.\n\n"
+        f"Siz endi bo'shsiz va yangi buyurtmalarni qabul qilishingiz mumkin.",
+        parse_mode="HTML",
+        reply_markup=master_main_menu(True),
+    )
+    
+    notification = NotificationService(bot, session)
+    
+    # Notify Client
+    if order and order.user:
+        await notification.notify_client_status_update(order, "order_cancelled_by_client") # Use same cancel key
+        # Better to send custom text
+        try:
+            await bot.send_message(
+                chat_id=order.user.telegram_id,
+                text=f"⚠️ Kechirasiz, ustamiz buyurtmani bajara olmadi va bekor qildi.\n"
+                     f"Iltimos, qaytadan yordam so'rang yoki dispetcher bilan bog'laning.",
+            )
+        except Exception:
+            pass
+
+    # Notify Dispatcher
+    try:
+        action_chat_ids = await notification._get_dispatcher_action_chat_ids()
+        for chat_id in action_chat_ids:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ <b>Usta buyurtmani bekor qildi!</b>\n\n"
+                     f"📋 Buyurtma: <code>{order_uid}</code>\n"
+                     f"Usta vazifani bajara olmadi. Mijoz ogohlantirildi.",
+                parse_mode="HTML",
+            )
+    except Exception:
+        pass
+
+    await callback.answer("Buyurtma bekor qilindi")

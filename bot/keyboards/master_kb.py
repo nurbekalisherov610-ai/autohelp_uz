@@ -62,6 +62,12 @@ def master_status_update_keyboard(order_uid: str, current_status: str) -> Inline
         callback_data=f"master_call:{order_uid}"
     )])
 
+    # Always show Cancel button during active order
+    buttons.append([InlineKeyboardButton(
+        text="❌ Bekor qilish",
+        callback_data=f"master_cancel:{order_uid}"
+    )])
+
     # Back to dashboard
     buttons.append([InlineKeyboardButton(
         text="🏠 Bosh sahifa",
