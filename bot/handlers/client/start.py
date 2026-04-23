@@ -52,10 +52,13 @@ async def cmd_start(
         from bot.handlers.admin.stats import admin_start
         return await admin_start(message)
         
-    if user_role in ("dispatcher", "master"):
-        return
-
-    # New user already selected language once; keep the flow smooth.
+    if user_role == "dispatcher":
+        from bot.handlers.dispatcher.orders import dispatcher_start
+        return await dispatcher_start(message)
+        
+    if user_role == "master":
+        from bot.handlers.master.orders import master_start
+        return await master_start(message, user_data=user_data)
     saved_lang = state_data.get("language")
     if (
         user_role == "new"
