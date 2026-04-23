@@ -228,38 +228,47 @@ async def master_active_order(
     state: FSMContext,
     session: AsyncSession,
     bot: Bot,
+    user_data: Master | None = None,
 ):
     """Show the master's current active order."""
     await state.clear()
-    order_repo = OrderRepo(session)
-    # Active orders for a master are those not completed/cancelled, where they are assigned.
-    active_orders = await order_repo.get_orders_by_status(
-        [
-            OrderStatus.ASSIGNED,
-            OrderStatus.ON_THE_WAY,
-            OrderStatus.ARRIVED,
-            OrderStatus.IN_PROGRESS,
-            OrderStatus.AWAITING_CONFIRMATION,
-        ]
-    )
-    # Filter for this master
-    my_active = [o for o in active_orders if o.master_telegram_id == message.from_user.id]
-
-    if not my_active:
+    if not user_data:
         await message.answer("Sizda ayni paytda faol buyurtma yo'q.")
         return
 
-    order = my_active[0]
-    
-    # Format the message
-    from bot.handlers.dispatcher.orders import _format_order_text
-    text = _format_order_text(order, "uz")
+    order_repo = OrderRepo(session)
+    # Use the proper repository method that filters by master DB id
+    order = await order_repo.get_active_by_master(user_data.id)
+
+    if not order:
+        await message.answer("Sizda ayni paytda faol buyurtma yo'q.")
+        return
+
+    # Eagerly load relationships if not loaded yet
+    if not order.user:
+        order = await order_repo.get_by_uid(order.order_uid)
+
+    # Build a clean order summary inline (no external dependency)
+    from models.order import PROBLEM_LABELS
+    problem_label = PROBLEM_LABELS.get(order.problem_type, {}).get("uz", "—")
+    client_name = escape(order.user.full_name) if order.user and order.user.full_name else "—"
+    client_phone = escape(order.user.phone) if order.user and order.user.phone else "—"
+    description = escape(order.description) if order.description else "—"
+    text = (
+        f"📋 <b>Buyurtma</b>: <code>{order.order_uid}</code>\n"
+        f"📌 Status: <b>{order.status.value}</b>\n"
+        f"👤 Mijoz: {client_name}\n"
+        f"📞 Telefon: <code>{client_phone}</code>\n"
+        f"🔧 Muammo: {problem_label}\n"
+        f"📝 Izoh: {description}"
+    )
 
     # If awaiting confirmation, just show that it's waiting
-    if order.status == OrderStatus.AWAITING_CONFIRMATION:
+    if order.status == OrderStatus.AWAITING_CONFIRM:
+        amount_str = f"{order.payment_amount:,.0f}" if order.payment_amount else "—"
         await message.answer(
             f"Sizning faol buyurtmangiz:\n\n{text}\n\n"
-            f"⏳ <b>Tasdiqlash kutilmoqda.</b> Dispetcher siz kiritgan summani ({order.payment_amount:,.0f} so'm) va videoni tekshirmoqda.",
+            f"⏳ <b>Tasdiqlash kutilmoqda.</b> Dispetcher siz kiritgan summani ({amount_str} so'm) va videoni tekshirmoqda.",
             parse_mode="HTML"
         )
         return
@@ -269,7 +278,7 @@ async def master_active_order(
         await message.answer(
             f"Sizning faol buyurtmangiz:\n\n{text}",
             parse_mode="HTML",
-            reply_markup=master_order_response(order.uid)
+            reply_markup=master_order_response(order.order_uid)
         )
         return
 
@@ -277,7 +286,7 @@ async def master_active_order(
     await message.answer(
         f"Sizning faol buyurtmangiz:\n\n{text}",
         parse_mode="HTML",
-        reply_markup=master_status_update_keyboard(order.uid, order.status.value)
+        reply_markup=master_status_update_keyboard(order.order_uid, order.status.value)
     )
 
     if order.latitude and order.longitude:
@@ -648,20 +657,7 @@ async def process_payment_amount(
     data = await state.get_data()
     video_file_id = data.get("video_file_id")
     video_kind = data.get("video_kind", "video_note")
-    
-    # Temporarily set message.video or message.video_note mock for the helper function
-    class MockVideo:
-        def __init__(self, file_id):
-            self.file_id = file_id
-            
-    if video_kind == "video_note":
-        message.video_note = MockVideo(video_file_id)
-    else:
-        message.video = MockVideo(video_file_id)
 
-    # Re-use the existing complete function, but pass the amount
-    # Actually, _complete_master_order_with_video already expects to find payment_amount in state or process it.
-    # Wait, it doesn't process amount. Let's just update state with amount.
     await state.update_data(payment_amount=amount)
     
     await _complete_master_order_with_video(

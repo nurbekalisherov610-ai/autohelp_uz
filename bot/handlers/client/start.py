@@ -54,11 +54,12 @@ async def cmd_start(
         
     if user_role == "dispatcher":
         from bot.handlers.dispatcher.orders import dispatcher_start
-        return await dispatcher_start(message)
+        return await dispatcher_start(message, state=state)
         
     if user_role == "master":
         from bot.handlers.master.orders import master_start
-        return await master_start(message, user_data=user_data)
+        return await master_start(message, state=state, user_data=user_data)
+
     saved_lang = state_data.get("language")
     if (
         user_role == "new"
