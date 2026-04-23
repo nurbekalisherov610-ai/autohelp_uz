@@ -283,8 +283,8 @@ async def cb_active_order(
     if not order:
         await callback.answer("Sizda ayni paytda faol buyurtma yo'q.", show_alert=True)
         return
-    if not order.user:
-        order = await order_repo.get_by_uid(order.order_uid)
+    # Unconditionally load order to ensure relationships (user/master) are eager-loaded
+    order = await order_repo.get_by_uid(order.order_uid)
     text = _order_card(order)
     if order.status == OrderStatus.AWAITING_CONFIRM:
         amount_str = f"{order.payment_amount:,.0f}" if order.payment_amount else "—"
