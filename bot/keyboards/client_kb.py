@@ -29,9 +29,9 @@ def share_contact_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=texts.get(lang, texts["uz"]), request_contact=True)]
         ],
-        is_persistent=True,
+        is_persistent=False,
         resize_keyboard=True,
-        one_time_keyboard=False,
+        one_time_keyboard=True,
         input_field_placeholder=(
             "Telefon raqamingizni yuboring"
             if lang == "uz"
@@ -85,9 +85,9 @@ def share_location_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=texts.get(lang, texts["uz"]), request_location=True)]
         ],
-        is_persistent=True,
+        is_persistent=False,
         resize_keyboard=True,
-        one_time_keyboard=False,
+        one_time_keyboard=True,
         input_field_placeholder=(
             "Joylashuv tugmasini bosing"
             if lang == "uz"

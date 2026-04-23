@@ -113,9 +113,6 @@ async def process_issue_selection(
 
     await callback.message.edit_text(
         t("leave_comment", user_lang),
-    )
-    await callback.message.answer(
-        "👇",
         reply_markup=skip_keyboard(user_lang),
     )
     await state.set_state(ReviewStates.entering_comment)

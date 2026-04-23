@@ -118,19 +118,14 @@ class Settings(BaseSettings):
                 except json.JSONDecodeError:
                     pass
 
-            # CSV / single value style
-            parts = [p.strip() for p in raw.split(",") if p.strip()]
+            # Fallback: extract any digits from the string
             out = []
-            for p in parts:
+            for token in re.findall(r"-?\d+", raw):
                 try:
-                    out.append(int(p))
-                except (TypeError, ValueError):
+                    out.append(int(token))
+                except ValueError:
                     pass
-            if out:
-                return out
-
-            # Last-resort fallback for noisy inputs like "id=123456"
-            return [int(x) for x in re.findall(r"-?\d+", raw)]
+            return out
 
         return value
 

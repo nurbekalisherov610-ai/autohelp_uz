@@ -159,19 +159,23 @@ class MasterRepo:
         """
         Get masters eligible for assignment.
         1) Prefer online available masters (no active orders).
-        2) If none and fallback is enabled, include active offline masters
-           that are not currently busy.
+        2) If allow_offline_fallback, include active offline masters
+           that are not currently busy, sorted below online ones.
         """
-        online_first = await self.get_available_masters_for_problem(problem_type)
-        if online_first or not allow_offline_fallback:
-            return online_first
-
         all_active = await self.get_all_active()
         if not all_active:
             return []
 
         busy_ids = await self._get_busy_master_ids()
-        candidates = [m for m in all_active if m.id not in busy_ids]
+        
+        candidates = []
+        for m in all_active:
+            if m.id in busy_ids:
+                continue
+            if not allow_offline_fallback and m.status != MasterStatus.ONLINE:
+                continue
+            candidates.append(m)
+
         if not candidates:
             return []
 

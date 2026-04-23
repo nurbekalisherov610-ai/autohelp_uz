@@ -163,8 +163,9 @@ async def process_problem_type(
                 "Например: <i>«Перегрелся двигатель», «Кончилось топливо»</i>\n\n"
                 "Напишите сообщение ниже 👇"
             )
-        await callback.message.edit_text(text, parse_mode="HTML")
+        await callback.message.delete()
         await state.set_state(OrderCreationStates.entering_description)
+        await callback.message.answer(text, parse_mode="HTML")
         await _touch_order_draft(
             session=session,
             telegram_id=callback.from_user.id,
@@ -188,20 +189,19 @@ async def process_problem_type(
                 "Или сразу <b>отправьте геолокацию</b>\n\n"
                 "👉 Нажмите кнопку «📍 Отправить геолокацию» ниже"
             )
-        await callback.message.edit_text(text, parse_mode="HTML")
-        # For known problems go straight to location step
+        await callback.message.delete()
         await state.set_state(OrderCreationStates.sharing_location)
+        await callback.message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=share_location_keyboard(user_lang),
+        )
         await _touch_order_draft(
             session=session,
             telegram_id=callback.from_user.id,
             user_data=user_data,
             user_lang=user_lang,
             state_name=OrderCreationStates.sharing_location.state,
-        )
-        await callback.message.answer(
-            t("share_location", user_lang),
-            parse_mode="HTML",
-            reply_markup=share_location_keyboard(user_lang),
         )
 
 

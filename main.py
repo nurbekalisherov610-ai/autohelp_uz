@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 from sqlalchemy import text
@@ -194,6 +195,16 @@ async def on_startup(bot: Bot):
         logger.info("✅ Redis connected")
     else:
         logger.info("⚡ Redis not configured — using memory storage")
+
+    # Set bot commands for UX
+    try:
+        commands = [
+            BotCommand(command="start", description="🔄 Botni qayta ishga tushirish"),
+            BotCommand(command="admin", description="⚙️ Boshqaruv paneli (faqat adminlar)"),
+        ]
+        await bot.set_my_commands(commands)
+    except Exception as e:
+        logger.warning(f"Failed to set bot commands: {e}")
 
     logger.info("✅ Startup complete — bot is ready!")
 

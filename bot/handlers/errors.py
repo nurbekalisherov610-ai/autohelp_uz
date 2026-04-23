@@ -33,9 +33,10 @@ async def global_error_handler(event: ErrorEvent, bot):
     
     logger.exception(f"Unhandled exception in bot: {exception}")
 
-    # Do not spam admins with huge tracebacks for parse-entity formatting mistakes.
-    if isinstance(exception, TelegramBadRequest) and "can't parse entities" in str(exception).lower():
-        return True
+    if isinstance(exception, TelegramBadRequest):
+        err_str = str(exception).lower()
+        if "can't parse entities" in err_str or "message is not modified" in err_str:
+            return True
 
     # Build an admin alert
     safe_err = html.escape(str(exception)[:400])

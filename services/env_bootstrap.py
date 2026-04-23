@@ -128,7 +128,7 @@ def _parse_master_labels(raw: str) -> dict[int, str]:
         except Exception:
             pass
 
-    parts = [p.strip() for p in re.split(r"[;\n]+", raw) if p.strip()]
+    parts = [p.strip() for p in re.split(r"[;,\n]+", raw) if p.strip()]
     for part in parts:
         if "=" not in part:
             continue
