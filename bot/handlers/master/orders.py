@@ -589,8 +589,15 @@ async def update_order_status(
 
         await state.update_data(completing_order_uid=order_uid)
         await state.set_state(MasterOrderStates.recording_video)
-        await _safe_master_edit_text(
-            callback,
+        
+        # Remove keyboard from the order message to prevent double clicks
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        # Send video prompt as a NEW message as requested
+        await callback.message.answer(
             t("master_video_prompt", "uz"),
             parse_mode="HTML",
         )
@@ -809,6 +816,7 @@ async def master_wrong_amount_format(message: Message):
 async def master_call_client(
     callback: CallbackQuery,
     session: AsyncSession,
+    bot: Bot,
 ):
     """Show client phone for master to call."""
     parts = (callback.data or "").split(":", 1)
@@ -834,16 +842,24 @@ async def master_call_client(
     if clean_phone and not clean_phone.startswith("+"):
         clean_phone = f"+{clean_phone}"
 
-    kb = None
-    if clean_phone:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="📲 Mijozga qo'ng'iroq qilish", url=f"tel:{clean_phone}")
-        ]])
-
+    # Telegram API does NOT support "tel:" URLs in InlineKeyboardButton.
+    # It throws TelegramBadRequest. We must send the number as text or a contact.
+    
     await callback.message.answer(
-        f"📞 Mijoz telefoni: <code>{safe_phone}</code>",
+        f"📞 Mijoz telefoni: <code>{safe_phone}</code>\n"
+        f"<i>Raqam ustiga bosib nusxa oling yoki qo'ng'iroq qiling.</i>",
         parse_mode="HTML",
-        reply_markup=kb,
     )
+    
+    # Optionally send a native contact card if we have a valid phone
+    if clean_phone:
+        try:
+            await bot.send_contact(
+                chat_id=callback.from_user.id,
+                phone_number=clean_phone,
+                first_name=order.user.full_name or "Mijoz",
+            )
+        except Exception:
+            pass
+
     await callback.answer()
