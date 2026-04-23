@@ -9,8 +9,6 @@ from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.filters import StateFilter
-from aiogram.fsm.state import any_state
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.filters.role_filter import RoleFilter
@@ -158,7 +156,7 @@ async def _complete_master_order_with_video(
 
 # ── Master /start ─────────────────────────────────────────────────
 
-@router.message(RoleFilter("master"), F.text == "/start", StateFilter(any_state))
+@router.message(RoleFilter("master"), F.text == "/start")
 async def master_start(
     message: Message,
     state: FSMContext,
@@ -191,7 +189,7 @@ async def master_start(
 @router.message(
     RoleFilter("master"),
     F.text.in_(["🟢 Online bo'lish", "🔴 Offline bo'lish"]),
-    StateFilter(any_state),
+
 )
 async def toggle_availability(
     message: Message,
@@ -221,7 +219,7 @@ async def toggle_availability(
 @router.message(
     RoleFilter("master"),
     F.text == "⚡ Faol buyurtma",
-    StateFilter(any_state),
+
 )
 async def master_active_order(
     message: Message,
@@ -300,7 +298,7 @@ async def master_active_order(
 
 # ── Statistics ────────────────────────────────────────────────────
 
-@router.message(RoleFilter("master"), F.text == "📊 Statistika", StateFilter(any_state))
+@router.message(RoleFilter("master"), F.text == "📊 Statistika")
 async def master_stats(
     message: Message,
     state: FSMContext,
@@ -337,7 +335,7 @@ async def master_stats(
     )
 
 
-@router.message(RoleFilter("master"), F.text == "⭐ Reytingim", StateFilter(any_state))
+@router.message(RoleFilter("master"), F.text == "⭐ Reytingim")
 async def master_rating(
     message: Message,
     state: FSMContext,

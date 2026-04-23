@@ -1,6 +1,7 @@
 """
 AutoHelp.uz - Throttling Middleware
-Rate limiting to prevent bot abuse.
+Rate limiting to prevent bot abuse (clients only).
+Masters and dispatchers are never throttled.
 """
 from typing import Any, Awaitable, Callable, Dict
 
@@ -14,14 +15,11 @@ from core.redis import get_redis
 class ThrottlingMiddleware(BaseMiddleware):
     """
     Simple rate limiting middleware using Redis.
-    Limits each user to a certain number of messages per time window.
+    Only throttles client users. Masters/dispatchers/admins are exempt
+    so their operational buttons always respond instantly.
     """
 
     def __init__(self, rate_limit: float = 0.5):
-        """
-        Args:
-            rate_limit: Minimum seconds between messages from same user.
-        """
         self.rate_limit = rate_limit
 
     async def __call__(
@@ -30,7 +28,12 @@ class ThrottlingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-        # Extract user_id
+        # Never throttle staff — their buttons must always respond
+        user_role = data.get("user_role", "new")
+        if user_role in ("master", "dispatcher", "admin", "super_admin"):
+            return await handler(event, data)
+
+        # Extract user_id for clients
         user_id = None
         if isinstance(event, Message) and event.from_user:
             user_id = event.from_user.id
@@ -43,12 +46,9 @@ class ThrottlingMiddleware(BaseMiddleware):
         redis: Redis = await get_redis()
         key = f"throttle:{user_id}"
 
-        # Check if user is throttled
         if await redis.exists(key):
-            # User is sending too fast, silently ignore
             return None
 
-        # Set throttle key with expiration
-        await redis.set(key, "1", ex=int(self.rate_limit) or 1)
+        await redis.set(key, "1", ex=max(int(self.rate_limit), 1))
 
         return await handler(event, data)
