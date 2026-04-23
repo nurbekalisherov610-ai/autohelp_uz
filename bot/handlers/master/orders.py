@@ -163,9 +163,20 @@ async def master_start(
 ):
     """Master main menu."""
     is_online = user_data.status == MasterStatus.ONLINE if user_data else False
+    status_icon = "🟢" if is_online else "🔴"
+    status_text = "Online (Buyurtmaga tayyor)" if is_online else "Offline (Dam olishda)"
+    
+    name = escape(user_data.full_name) if user_data else "Usta"
+    rating = f"{user_data.rating:.1f}" if user_data else "5.0"
+    completed = user_data.completed_orders if user_data else 0
+
     await message.answer(
-        f"👨‍🔧 <b>Usta paneli</b>\n\n"
-        f"Holat: {'🟢 Online' if is_online else '🔴 Offline'}",
+        f"Assalomu alaykum, <b>{name}</b>! 👋\n\n"
+        f"👨‍🔧 <b>Shaxsiy Kabinet</b>\n"
+        f"📊 Reytingingiz: ⭐ {rating}\n"
+        f"✅ Bajarilgan ishlar: {completed} ta\n"
+        f"📡 Holat: {status_icon} <b>{status_text}</b>\n\n"
+        f"<i>Ishni boshlash uchun pastdagi tugmadan holatingizni yangilang.</i>",
         parse_mode="HTML",
         reply_markup=master_main_menu(is_online),
     )
@@ -207,6 +218,7 @@ async def toggle_availability(
 async def master_active_order(
     message: Message,
     session: AsyncSession,
+    bot: Bot,
 ):
     """Show the master's current active order."""
     order_repo = OrderRepo(session)
@@ -258,6 +270,13 @@ async def master_active_order(
         reply_markup=master_status_update_keyboard(order.uid, order.status.value)
     )
 
+    if order.latitude and order.longitude:
+        await bot.send_location(
+            chat_id=message.from_user.id,
+            latitude=order.latitude,
+            longitude=order.longitude,
+        )
+
 
 
 # ── Statistics ────────────────────────────────────────────────────
@@ -285,14 +304,14 @@ async def master_stats(
     monthly_stats = await master_repo.get_master_stats(user_data.id, since=month_start)
 
     await message.answer(
-        t(
-            "master_stats", "uz",
-            today=today_stats["completed_orders"],
-            weekly=weekly_stats["completed_orders"],
-            monthly=monthly_stats["completed_orders"],
-            monthly_sum=f"{monthly_stats['total_sum']:,.0f}",
-            rating=f"{user_data.rating:.1f}",
-        ),
+        f"📊 <b>{escape(user_data.full_name)} ning statistikasi</b>\n"
+        f"──────────────────\n"
+        f"📅 <b>Bugun:</b> {today_stats['completed_orders']} ta buyurtma\n"
+        f"📆 <b>Shu hafta:</b> {weekly_stats['completed_orders']} ta buyurtma\n"
+        f"🗓 <b>Shu oy:</b> {monthly_stats['completed_orders']} ta buyurtma\n"
+        f"──────────────────\n"
+        f"💰 <b>Oylik tushum:</b> {monthly_stats['total_sum']:,.0f} so'm\n"
+        f"⭐ <b>Joriy reyting:</b> {user_data.rating:.1f} / 5.0",
         parse_mode="HTML",
     )
 
@@ -307,11 +326,16 @@ async def master_rating(
         return
 
     stars = "⭐" * round(user_data.rating)
+    empty_stars = "🤍" * (5 - round(user_data.rating))
+    
     await message.answer(
-        f"⭐ <b>Sizning reytingingiz:</b> {user_data.rating:.1f}/5.0\n"
-        f"{stars}\n\n"
-        f"✅ Bajarilgan buyurtmalar: {user_data.completed_orders}\n"
-        f"❌ Rad etilgan: {user_data.rejected_orders}",
+        f"🏆 <b>Sizning reytingingiz</b>\n"
+        f"──────────────────\n"
+        f"Reyting: <b>{user_data.rating:.1f}</b> / 5.0\n"
+        f"Baho: {stars}{empty_stars}\n\n"
+        f"✅ Muvaffaqiyatli yakunlangan: <b>{user_data.completed_orders}</b> ta\n"
+        f"❌ Rad etilgan buyurtmalar: <b>{user_data.rejected_orders}</b> ta\n\n"
+        f"<i>Mijozlar sizga bergan baholar asosida reytingingiz shakllanadi. Har bir buyurtmani a'lo darajada bajarishga harakat qiling!</i>",
         parse_mode="HTML",
     )
 
