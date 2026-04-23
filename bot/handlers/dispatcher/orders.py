@@ -1320,13 +1320,186 @@ async def call_client(
     order_repo = OrderRepo(session)
     order = await order_repo.get_by_uid(order_uid)
 
+
+# ── Cancel order as dispatcher ────────────────────────────────────
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_edit_amount:"),
+)
+async def start_edit_amount(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    """Start payment amount edit flow for an awaiting confirmation order."""
+    order_uid = callback.data.split(":")[1]
+    await state.update_data(edit_amount_order_uid=order_uid)
+    await state.set_state(DispatcherOrderStates.editing_amount)
+
+    await _safe_edit_text(
+        callback,
+        f"✏️ <b>{order_uid}</b> uchun yangi summani kiriting (so'm):\n\n"
+        f"Masalan: <code>180000</code>",
+        parse_mode="HTML",
+        reply_markup=dispatcher_order_navigation(order_uid),
+    )
+    await callback.answer()
+
+
+@router.message(
+    DispatcherOrderStates.editing_amount,
+    F.text,
+)
+async def process_edit_amount(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+):
+    """Apply edited amount to both order and payment records."""
+    data = await state.get_data()
+    order_uid = data.get("edit_amount_order_uid")
+    if not order_uid:
+        await state.clear()
+        await message.answer("❌ Buyurtma topilmadi. Qaytadan urinib ko'ring.")
+        return
+
+    try:
+        clean = message.text.replace(" ", "").replace(",", "").replace(".", "")
+        amount = float(clean)
+        if amount <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.answer(
+            "⚠️ Iltimos, summani to'g'ri kiriting (faqat raqam).\n"
+            "Masalan: 180000"
+        )
+        return
+
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+    if not order:
+        await state.clear()
+        await message.answer("❌ Buyurtma topilmadi.")
+        return
+
+    await order_repo.set_payment_amount(order_uid, amount)
+
+    from models.payment import Payment
+    await session.execute(
+        update(Payment)
+        .where(Payment.order_id == order.id)
+        .values(amount=amount)
+    )
+
+    await state.clear()
+    await message.answer(
+        f"✅ Buyurtma <code>{order_uid}</code> summasi yangilandi: "
+        f"<b>{amount:,.0f} so'm</b>",
+        parse_mode="HTML",
+        reply_markup=dispatcher_order_navigation(order_uid),
+    )
+
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_cancel:"),
+)
+async def dispatcher_cancel_order(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    bot: Bot,
+):
+    """Cancel an order as dispatcher."""
+    order_uid = callback.data.split(":")[1]
+    order_service = OrderService(session)
+
+    try:
+        order = await order_service.cancel_order(
+            order_uid=order_uid,
+            cancelled_by_telegram_id=callback.from_user.id,
+            cancelled_by_role="dispatcher",
+        )
+    except ValueError as e:
+        await callback.answer(str(e), show_alert=True)
+        return
+
+    await _safe_edit_text(
+        callback,
+        f"❌ Buyurtma <code>{order_uid}</code> bekor qilindi.",
+        parse_mode="HTML",
+        reply_markup=dispatcher_main_menu(),
+    )
+
+    # Notify client
+    if order and order.user:
+        notification = NotificationService(bot, session)
+        await notification.notify_client_status_update(
+            order, "order_cancelled_by_client"
+        )
+
+    await callback.answer()
+
+
+# ── View on map ───────────────────────────────────────────────────
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_map:"),
+)
+async def show_order_on_map(
+    callback: CallbackQuery,
+    session: AsyncSession,
+):
+    """Send order location to dispatcher."""
+    order_uid = callback.data.split(":")[1]
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+
+    if not order:
+        await callback.answer("Buyurtma topilmadi", show_alert=True)
+        return
+
+    await callback.message.answer_location(
+        latitude=order.latitude,
+        longitude=order.longitude,
+    )
+    await callback.answer()
+
+
+# ── Call client ───────────────────────────────────────────────────
+
+@router.callback_query(
+    RoleFilter("dispatcher", "admin", "super_admin"),
+    F.data.startswith("dispatch_call:"),
+)
+async def call_client(
+    callback: CallbackQuery,
+    session: AsyncSession,
+):
+    """Show client's phone number for calling."""
+    order_uid = callback.data.split(":")[1]
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_by_uid(order_uid)
+
     if not order or not order.user:
         await callback.answer("Ma'lumot topilmadi", show_alert=True)
         return
 
     safe_phone = escape(order.user.phone or "—")
+    clean_phone = "".join(filter(str.isdigit, order.user.phone or ""))
+    if clean_phone and not clean_phone.startswith("+"):
+        clean_phone = f"+{clean_phone}"
+
+    kb = None
+    if clean_phone:
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📲 Mijozga qo'ng'iroq qilish", url=f"tel:{clean_phone}")
+        ]])
+
     await callback.message.answer(
         f"📞 Mijoz telefoni: <code>{safe_phone}</code>",
         parse_mode="HTML",
+        reply_markup=kb,
     )
     await callback.answer()

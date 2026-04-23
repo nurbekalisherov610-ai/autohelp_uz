@@ -690,8 +690,20 @@ async def master_call_client(
         return
 
     safe_phone = escape(order.user.phone or "—")
+    clean_phone = "".join(filter(str.isdigit, order.user.phone or ""))
+    if clean_phone and not clean_phone.startswith("+"):
+        clean_phone = f"+{clean_phone}"
+
+    kb = None
+    if clean_phone:
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📲 Mijozga qo'ng'iroq qilish", url=f"tel:{clean_phone}")
+        ]])
+
     await callback.message.answer(
         f"📞 Mijoz telefoni: <code>{safe_phone}</code>",
         parse_mode="HTML",
+        reply_markup=kb,
     )
     await callback.answer()
