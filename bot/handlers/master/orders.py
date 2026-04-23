@@ -28,6 +28,18 @@ from repositories.stats_repo import StatsRepo
 
 router = Router(name="master")
 
+# Menu button texts that should ALWAYS work regardless of FSM state.
+# If a master clicks any of these while stuck in a state, the state handler
+# must NOT consume the event — let it fall through to the menu handler.
+MASTER_MENU_TEXTS = {
+    "/start",
+    "⚡ Faol buyurtma",
+    "🟢 Online bo'lish",
+    "🔴 Offline bo'lish",
+    "📊 Statistika",
+    "⭐ Reytingim",
+}
+
 
 def _master_keyboard_status_key(status: OrderStatus | None) -> str | None:
     """Map persisted order status to the keyboard flow key."""
@@ -630,7 +642,11 @@ async def update_order_status(
 
 # ── Enter payment amount ──────────────────────────────────────────
 
-@router.message(MasterOrderStates.entering_amount, F.text)
+@router.message(
+    MasterOrderStates.entering_amount,
+    F.text,
+    ~F.text.in_(MASTER_MENU_TEXTS),
+)
 async def process_payment_amount(
     message: Message,
     state: FSMContext,
@@ -764,11 +780,27 @@ async def process_master_video_file(
     )
 
 
-@router.message(MasterOrderStates.recording_video, ~(F.video_note | F.video))
+@router.message(
+    MasterOrderStates.recording_video,
+    ~(F.video_note | F.video),
+    ~F.text.in_(MASTER_MENU_TEXTS),
+)
 async def master_wrong_video_format(message: Message):
-    """Handle non-video_note in video state."""
+    """Handle non-video messages in video state (but let menu buttons through)."""
     await message.answer(
-        "⚠️ Iltimos, <b>dumaloq video</b> yoki oddiy <b>video</b> yuboring (15 soniyagacha).",
+        "⚠️ Iltimos, <b>dumaloq video</b> yoki oddiy <b>video</b> yuboring (15 soniyagacha).\n\n"
+        "<i>Bekor qilish uchun /start bosing.</i>",
+        parse_mode="HTML",
+    )
+
+
+@router.message(MasterOrderStates.entering_amount, ~F.text)
+async def master_wrong_amount_format(message: Message):
+    """Handle non-text in amount state."""
+    await message.answer(
+        "⚠️ Iltimos, faqat <b>raqam</b> yuboring.\n"
+        "Masalan: <code>150000</code>\n\n"
+        "<i>Bekor qilish uchun /start bosing.</i>",
         parse_mode="HTML",
     )
 
