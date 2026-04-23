@@ -15,11 +15,11 @@ from bot.filters.role_filter import RoleFilter
 from bot.states.master_states import MasterOrderStates
 from bot.keyboards.master_kb import (
     master_main_menu, master_order_response,
-    master_status_update_keyboard,
+    master_status_update_keyboard, master_back_keyboard,
 )
 from locales.texts import t
 from models.master import Master, MasterStatus
-from models.order import OrderStatus
+from models.order import OrderStatus, PROBLEM_LABELS
 from services.order_service import OrderService
 from services.notification_service import NotificationService
 from repositories.order_repo import OrderRepo
@@ -27,18 +27,6 @@ from repositories.master_repo import MasterRepo
 from repositories.stats_repo import StatsRepo
 
 router = Router(name="master")
-
-# Menu button texts that should ALWAYS work regardless of FSM state.
-# If a master clicks any of these while stuck in a state, the state handler
-# must NOT consume the event — let it fall through to the menu handler.
-MASTER_MENU_TEXTS = {
-    "/start",
-    "⚡ Faol buyurtma",
-    "🟢 Online bo'lish",
-    "🔴 Offline bo'lish",
-    "📊 Statistika",
-    "⭐ Reytingim",
-}
 
 
 def _master_keyboard_status_key(status: OrderStatus | None) -> str | None:
@@ -166,105 +154,31 @@ async def _complete_master_order_with_video(
         await notification.notify_dispatcher_awaiting_confirm(order, amount)
 
 
-# ── Master /start ─────────────────────────────────────────────────
+# ── Master dashboard helper ───────────────────────────────────────
 
-@router.message(RoleFilter("master"), F.text == "/start")
-async def master_start(
-    message: Message,
-    state: FSMContext,
-    user_data: Master | None = None,
-):
-    """Show master dashboard."""
-    await state.clear()
+def _dashboard_text(user_data: Master | None) -> str:
     is_online = user_data.status == MasterStatus.ONLINE if user_data else False
     status_icon = "🟢" if is_online else "🔴"
     status_text = "Online (Buyurtmaga tayyor)" if is_online else "Offline (Dam olishda)"
-    
     name = escape(user_data.full_name) if user_data else "Usta"
     rating = f"{user_data.rating:.1f}" if user_data else "5.0"
     completed = user_data.completed_orders if user_data else 0
-
-    await message.answer(
+    return (
         f"Assalomu alaykum, <b>{name}</b>! 👋\n\n"
         f"👨‍🔧 <b>Shaxsiy Kabinet</b>\n"
         f"📊 Reytingingiz: ⭐ {rating}\n"
         f"✅ Bajarilgan ishlar: {completed} ta\n"
         f"📡 Holat: {status_icon} <b>{status_text}</b>\n\n"
-        f"<i>Ishni boshlash uchun pastdagi tugmadan holatingizni yangilang.</i>",
-        parse_mode="HTML",
-        reply_markup=master_main_menu(is_online),
+        f"<i>Quyidagi tugmalardan birini bosing:</i>"
     )
 
 
-# ── Toggle availability ──────────────────────────────────────────
-
-@router.message(
-    RoleFilter("master"),
-    F.text.in_(["🟢 Online bo'lish", "🔴 Offline bo'lish"]),
-
-)
-async def toggle_availability(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    user_data: Master | None = None,
-):
-    """Toggle master online/offline status."""
-    if not user_data:
-        return
-
-    await state.clear()
-    master_repo = MasterRepo(session)
-    new_status = await master_repo.toggle_status(message.from_user.id)
-
-    is_online = new_status == MasterStatus.ONLINE
-    status_text = t("master_toggle_online" if is_online else "master_toggle_offline", "uz")
-
-    await message.answer(
-        status_text,
-        reply_markup=master_main_menu(is_online),
-    )
-
-
-# ── Active Order ──────────────────────────────────────────
-
-@router.message(
-    RoleFilter("master"),
-    F.text == "⚡ Faol buyurtma",
-
-)
-async def master_active_order(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    bot: Bot,
-    user_data: Master | None = None,
-):
-    """Show the master's current active order."""
-    await state.clear()
-    if not user_data:
-        await message.answer("Sizda ayni paytda faol buyurtma yo'q.")
-        return
-
-    order_repo = OrderRepo(session)
-    # Use the proper repository method that filters by master DB id
-    order = await order_repo.get_active_by_master(user_data.id)
-
-    if not order:
-        await message.answer("Sizda ayni paytda faol buyurtma yo'q.")
-        return
-
-    # Eagerly load relationships if not loaded yet
-    if not order.user:
-        order = await order_repo.get_by_uid(order.order_uid)
-
-    # Build a clean order summary inline (no external dependency)
-    from models.order import PROBLEM_LABELS
+def _order_card(order) -> str:
     problem_label = PROBLEM_LABELS.get(order.problem_type, {}).get("uz", "—")
     client_name = escape(order.user.full_name) if order.user and order.user.full_name else "—"
     client_phone = escape(order.user.phone) if order.user and order.user.phone else "—"
     description = escape(order.description) if order.description else "—"
-    text = (
+    return (
         f"📋 <b>Buyurtma</b>: <code>{order.order_uid}</code>\n"
         f"📌 Status: <b>{order.status.value}</b>\n"
         f"👤 Mijoz: {client_name}\n"
@@ -273,105 +187,179 @@ async def master_active_order(
         f"📝 Izoh: {description}"
     )
 
-    # If awaiting confirmation, just show that it's waiting
-    if order.status == OrderStatus.AWAITING_CONFIRM:
-        amount_str = f"{order.payment_amount:,.0f}" if order.payment_amount else "—"
-        await message.answer(
-            f"Sizning faol buyurtmangiz:\n\n{text}\n\n"
-            f"⏳ <b>Tasdiqlash kutilmoqda.</b> Dispetcher siz kiritgan summani ({amount_str} so'm) va videoni tekshirmoqda.",
-            parse_mode="HTML"
-        )
-        return
 
-    # If just assigned, show accept/reject
-    if order.status == OrderStatus.ASSIGNED:
-        await message.answer(
-            f"Sizning faol buyurtmangiz:\n\n{text}",
-            parse_mode="HTML",
-            reply_markup=master_order_response(order.order_uid)
-        )
-        return
+# ── Master /start (message command) ───────────────────────────────
 
-    # Otherwise, show status update keyboard
+@router.message(RoleFilter("master"), F.text == "/start")
+async def master_start(
+    message: Message,
+    state: FSMContext,
+    user_data: Master | None = None,
+):
+    """Show master dashboard via /start command."""
+    await state.clear()
+    is_online = user_data.status == MasterStatus.ONLINE if user_data else False
     await message.answer(
-        f"Sizning faol buyurtmangiz:\n\n{text}",
+        _dashboard_text(user_data),
         parse_mode="HTML",
-        reply_markup=master_status_update_keyboard(order.order_uid, order.status.value)
+        reply_markup=master_main_menu(is_online),
     )
 
-    if order.latitude and order.longitude:
-        await bot.send_location(
-            chat_id=message.from_user.id,
-            latitude=order.latitude,
-            longitude=order.longitude,
-        )
+
+# ── ALL MENU BUTTONS (inline callbacks — immune to FSM/throttle) ──
+
+@router.callback_query(F.data.in_({"master_menu:home", "master_menu:dashboard"}))
+async def cb_master_home(
+    callback: CallbackQuery,
+    state: FSMContext,
+    user_data: Master | None = None,
+):
+    """Return to dashboard from any screen."""
+    await state.clear()
+    is_online = user_data.status == MasterStatus.ONLINE if user_data else False
+    await _safe_master_edit_text(
+        callback, _dashboard_text(user_data),
+        parse_mode="HTML",
+        reply_markup=master_main_menu(is_online),
+    )
+    await callback.answer()
 
 
-
-# ── Statistics ────────────────────────────────────────────────────
-
-@router.message(RoleFilter("master"), F.text == "📊 Statistika")
-async def master_stats(
-    message: Message,
+@router.callback_query(F.data.in_({"master_menu:toggle_online", "master_menu:toggle_offline"}))
+async def cb_toggle_availability(
+    callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     user_data: Master | None = None,
 ):
-    """Show master's personal statistics."""
+    """Toggle master online/offline."""
+    if not user_data:
+        await callback.answer("Xatolik", show_alert=True)
+        return
+    await state.clear()
+    master_repo = MasterRepo(session)
+    new_status = await master_repo.toggle_status(callback.from_user.id)
+    is_online = new_status == MasterStatus.ONLINE
+    status_msg = "🟢 Siz endi <b>Online</b> — buyurtmalarga tayyorsiz!" if is_online else "🔴 Siz endi <b>Offline</b> — dam olish rejimi."
+    await _safe_master_edit_text(
+        callback, status_msg,
+        parse_mode="HTML",
+        reply_markup=master_main_menu(is_online),
+    )
+    await callback.answer("Online" if is_online else "Offline")
+
+
+@router.callback_query(F.data == "master_menu:active_order")
+async def cb_active_order(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+    user_data: Master | None = None,
+):
+    """Show master's active order."""
     await state.clear()
     if not user_data:
+        await callback.answer("Sizda faol buyurtma yo'q.", show_alert=True)
         return
+    order_repo = OrderRepo(session)
+    order = await order_repo.get_active_by_master(user_data.id)
+    if not order:
+        await callback.answer("Sizda ayni paytda faol buyurtma yo'q.", show_alert=True)
+        return
+    if not order.user:
+        order = await order_repo.get_by_uid(order.order_uid)
+    text = _order_card(order)
+    if order.status == OrderStatus.AWAITING_CONFIRM:
+        amount_str = f"{order.payment_amount:,.0f}" if order.payment_amount else "—"
+        await _safe_master_edit_text(
+            callback,
+            f"{text}\n\n⏳ <b>Tasdiqlash kutilmoqda.</b>\nSumma: {amount_str} so'm",
+            parse_mode="HTML",
+            reply_markup=master_back_keyboard(),
+        )
+    elif order.status == OrderStatus.ASSIGNED:
+        await _safe_master_edit_text(
+            callback, f"Yangi buyurtma:\n\n{text}",
+            parse_mode="HTML",
+            reply_markup=master_order_response(order.order_uid),
+        )
+    else:
+        await _safe_master_edit_text(
+            callback, f"Faol buyurtma:\n\n{text}",
+            parse_mode="HTML",
+            reply_markup=master_status_update_keyboard(order.order_uid, order.status.value),
+        )
+    if order.latitude and order.longitude:
+        await bot.send_location(
+            chat_id=callback.from_user.id,
+            latitude=order.latitude, longitude=order.longitude,
+        )
+    await callback.answer()
 
+
+@router.callback_query(F.data == "master_menu:stats")
+async def cb_master_stats(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user_data: Master | None = None,
+):
+    """Show statistics."""
+    await state.clear()
+    if not user_data:
+        await callback.answer("Xatolik", show_alert=True)
+        return
     from datetime import datetime, timedelta
     now = datetime.utcnow()
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = now - timedelta(days=now.weekday())
-    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
     master_repo = MasterRepo(session)
-    today_stats = await master_repo.get_master_stats(user_data.id, since=today)
-    weekly_stats = await master_repo.get_master_stats(user_data.id, since=week_start)
-    monthly_stats = await master_repo.get_master_stats(user_data.id, since=month_start)
-
-    await message.answer(
-        f"📊 <b>{escape(user_data.full_name)} ning statistikasi</b>\n"
+    ts = await master_repo.get_master_stats(user_data.id, since=today)
+    ws = await master_repo.get_master_stats(user_data.id, since=week_start)
+    ms = await master_repo.get_master_stats(user_data.id, since=month_start)
+    await _safe_master_edit_text(
+        callback,
+        f"📊 <b>{escape(user_data.full_name)}</b>\n"
         f"──────────────────\n"
-        f"📅 <b>Bugun:</b> {today_stats['completed_orders']} ta buyurtma\n"
-        f"📆 <b>Shu hafta:</b> {weekly_stats['completed_orders']} ta buyurtma\n"
-        f"🗓 <b>Shu oy:</b> {monthly_stats['completed_orders']} ta buyurtma\n"
+        f"📅 Bugun: {ts['completed_orders']} ta\n"
+        f"📆 Hafta: {ws['completed_orders']} ta\n"
+        f"🗓 Oy: {ms['completed_orders']} ta\n"
         f"──────────────────\n"
-        f"💰 <b>Oylik tushum:</b> {monthly_stats['total_sum']:,.0f} so'm\n"
-        f"⭐ <b>Joriy reyting:</b> {user_data.rating:.1f} / 5.0",
+        f"💰 Oylik: {ms['total_sum']:,.0f} so'm\n"
+        f"⭐ Reyting: {user_data.rating:.1f} / 5.0",
         parse_mode="HTML",
+        reply_markup=master_back_keyboard(),
     )
+    await callback.answer()
 
 
-@router.message(RoleFilter("master"), F.text == "⭐ Reytingim")
-async def master_rating(
-    message: Message,
+@router.callback_query(F.data == "master_menu:rating")
+async def cb_master_rating(
+    callback: CallbackQuery,
     state: FSMContext,
-    session: AsyncSession,
     user_data: Master | None = None,
 ):
-    """Show master's personal rating."""
+    """Show rating."""
     await state.clear()
     if not user_data:
+        await callback.answer("Xatolik", show_alert=True)
         return
-
     stars = "⭐" * round(user_data.rating)
-    empty_stars = "🤍" * (5 - round(user_data.rating))
-    
-    await message.answer(
+    empty = "🤍" * (5 - round(user_data.rating))
+    await _safe_master_edit_text(
+        callback,
         f"🏆 <b>Sizning reytingingiz</b>\n"
         f"──────────────────\n"
         f"Reyting: <b>{user_data.rating:.1f}</b> / 5.0\n"
-        f"Baho: {stars}{empty_stars}\n\n"
-        f"✅ Muvaffaqiyatli yakunlangan: <b>{user_data.completed_orders}</b> ta\n"
-        f"❌ Rad etilgan buyurtmalar: <b>{user_data.rejected_orders}</b> ta\n\n"
-        f"<i>Mijozlar sizga bergan baholar asosida reytingingiz shakllanadi. Har bir buyurtmani a'lo darajada bajarishga harakat qiling!</i>",
+        f"{stars}{empty}\n\n"
+        f"✅ Yakunlangan: <b>{user_data.completed_orders}</b> ta\n"
+        f"❌ Rad etilgan: <b>{user_data.rejected_orders}</b> ta",
         parse_mode="HTML",
+        reply_markup=master_back_keyboard(),
     )
+    await callback.answer()
 
 
 # ── Accept/Reject order ──────────────────────────────────────────
@@ -642,11 +630,7 @@ async def update_order_status(
 
 # ── Enter payment amount ──────────────────────────────────────────
 
-@router.message(
-    MasterOrderStates.entering_amount,
-    F.text,
-    ~F.text.in_(MASTER_MENU_TEXTS),
-)
+@router.message(MasterOrderStates.entering_amount, F.text)
 async def process_payment_amount(
     message: Message,
     state: FSMContext,
@@ -780,11 +764,7 @@ async def process_master_video_file(
     )
 
 
-@router.message(
-    MasterOrderStates.recording_video,
-    ~(F.video_note | F.video),
-    ~F.text.in_(MASTER_MENU_TEXTS),
-)
+@router.message(MasterOrderStates.recording_video, ~(F.video_note | F.video))
 async def master_wrong_video_format(message: Message):
     """Handle non-video messages in video state (but let menu buttons through)."""
     await message.answer(
