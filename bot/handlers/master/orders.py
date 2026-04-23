@@ -137,21 +137,37 @@ async def _complete_master_order_with_video(
         f"✅ <b>Buyurtma yakunlandi!</b>\n\n"
         f"📋 ID: <code>{order_uid}</code>\n"
         f"💰 Summa: {amount:,.0f} so'm\n\n"
-        f"Dispetcher tasdiqlanishini kutamiz...",
+        f"Rahmat! Siz yangi buyurtmalarga tayyorsiz.",
         parse_mode="HTML",
         reply_markup=master_main_menu(True),
     )
 
     if order and user_data:
         notification = NotificationService(bot, session)
+        # Send video to channel
         await notification.send_master_video_to_channel(
-            order,
-            user_data,
-            video_file_id,
-            amount,
-            video_kind=video_kind,
+            order, user_data, video_file_id, amount, video_kind=video_kind,
         )
-        await notification.notify_dispatcher_awaiting_confirm(order, amount)
+        # Notify client that order is completed + send rating prompt
+        await notification.notify_client_status_update(
+            order, "status_completed", amount=f"{amount:,.0f}"
+        )
+        # Send rating keyboard to client
+        if order.user:
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            try:
+                await bot.send_message(
+                    chat_id=order.user.telegram_id,
+                    text="⭐ Xizmatni baholang:",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="⭐ Baholash",
+                            callback_data=f"rate_order:{order_uid}",
+                        )]
+                    ]),
+                )
+            except Exception:
+                pass
 
 
 # ── Master dashboard helper ───────────────────────────────────────

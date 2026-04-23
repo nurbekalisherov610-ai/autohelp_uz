@@ -148,7 +148,7 @@ class OrderService:
             OrderStatus.ACCEPTED: [OrderStatus.ON_THE_WAY, OrderStatus.CANCELLED],
             OrderStatus.ON_THE_WAY: [OrderStatus.ARRIVED],
             OrderStatus.ARRIVED: [OrderStatus.IN_PROGRESS],
-            OrderStatus.IN_PROGRESS: [OrderStatus.AWAITING_CONFIRM],
+            OrderStatus.IN_PROGRESS: [OrderStatus.COMPLETED, OrderStatus.AWAITING_CONFIRM],
             OrderStatus.AWAITING_CONFIRM: [OrderStatus.COMPLETED],
             OrderStatus.REJECTED: [OrderStatus.ASSIGNED],
         }
@@ -209,16 +209,20 @@ class OrderService:
             video_file_id=video_file_id,
         )
 
-        # Update status to AWAITING_CONFIRM
+        # Auto-complete: no dispatcher confirmation needed
         await self.order_repo.update_status(
             order_uid=order_uid,
-            new_status=OrderStatus.AWAITING_CONFIRM,
+            new_status=OrderStatus.COMPLETED,
             changed_by_telegram_id=master_telegram_id,
             changed_by_role="master",
             note=f"Amount: {amount} so'm",
         )
 
-        logger.info(f"Order {order_uid} awaiting confirmation, amount: {amount}")
+        # Update master stats
+        if order.master_id:
+            await self.master_repo.increment_stats(order.master_id, completed=True)
+
+        logger.info(f"Order {order_uid} completed, amount: {amount}")
         return order
 
     async def cancel_order(
