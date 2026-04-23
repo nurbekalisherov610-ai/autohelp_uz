@@ -526,10 +526,10 @@ async def update_order_status(
             return
 
         await state.update_data(completing_order_uid=order_uid)
-        await state.set_state(MasterOrderStates.entering_amount)
+        await state.set_state(MasterOrderStates.recording_video)
         await _safe_master_edit_text(
             callback,
-            t("master_enter_amount", "uz"),
+            t("master_video_prompt", "uz"),
             parse_mode="HTML",
         )
         await callback.answer()
@@ -589,8 +589,10 @@ async def process_payment_amount(
     message: Message,
     state: FSMContext,
     session: AsyncSession,
+    bot: Bot,
+    user_data: Master | None = None,
 ):
-    """Handle payment amount entry."""
+    """Handle payment amount entry and finalize order."""
     try:
         # Clean input: remove spaces, commas
         clean = message.text.replace(" ", "").replace(",", "").replace(".", "")
@@ -604,13 +606,34 @@ async def process_payment_amount(
         )
         return
 
-    await state.update_data(payment_amount=amount)
+    data = await state.get_data()
+    video_file_id = data.get("video_file_id")
+    video_kind = data.get("video_kind", "video_note")
+    
+    # Temporarily set message.video or message.video_note mock for the helper function
+    class MockVideo:
+        def __init__(self, file_id):
+            self.file_id = file_id
+            
+    if video_kind == "video_note":
+        message.video_note = MockVideo(video_file_id)
+    else:
+        message.video = MockVideo(video_file_id)
 
-    await message.answer(
-        t("master_video_prompt", "uz"),
-        parse_mode="HTML",
+    # Re-use the existing complete function, but pass the amount
+    # Actually, _complete_master_order_with_video already expects to find payment_amount in state or process it.
+    # Wait, it doesn't process amount. Let's just update state with amount.
+    await state.update_data(payment_amount=amount)
+    
+    await _complete_master_order_with_video(
+        message=message,
+        state=state,
+        session=session,
+        bot=bot,
+        user_data=user_data,
+        video_file_id=video_file_id,
+        video_kind=video_kind,
     )
-    await state.set_state(MasterOrderStates.recording_video)
 
 
 @router.callback_query(
@@ -647,10 +670,10 @@ async def request_amount_from_button(
         return
 
     await state.update_data(completing_order_uid=order_uid)
-    await state.set_state(MasterOrderStates.entering_amount)
+    await state.set_state(MasterOrderStates.recording_video)
     await _safe_master_edit_text(
         callback,
-        t("master_enter_amount", "uz"),
+        t("master_video_prompt", "uz"),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -675,14 +698,11 @@ async def process_master_video(
         )
         return
 
-    await _complete_master_order_with_video(
-        message=message,
-        state=state,
-        session=session,
-        bot=bot,
-        user_data=user_data,
-        video_file_id=message.video_note.file_id,
-        video_kind="video_note",
+    await state.update_data(video_file_id=message.video_note.file_id, video_kind="video_note")
+    await state.set_state(MasterOrderStates.entering_amount)
+    await message.answer(
+        t("master_enter_amount", "uz"),
+        parse_mode="HTML",
     )
 
 
@@ -703,14 +723,11 @@ async def process_master_video_file(
         )
         return
 
-    await _complete_master_order_with_video(
-        message=message,
-        state=state,
-        session=session,
-        bot=bot,
-        user_data=user_data,
-        video_file_id=message.video.file_id,
-        video_kind="video",
+    await state.update_data(video_file_id=message.video.file_id, video_kind="video")
+    await state.set_state(MasterOrderStates.entering_amount)
+    await message.answer(
+        t("master_enter_amount", "uz"),
+        parse_mode="HTML",
     )
 
 
