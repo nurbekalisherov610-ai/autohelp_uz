@@ -1,0 +1,5 @@
+{"asctime": "2026-04-18 22:27:43,629", "levelname": "INFO", "name": "src.core.startup", "message": "Dependencies are ready"}
+INFO:     127.0.0.1:56480 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56489 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56524 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56524 - "GET /ready HTTP/1.1" 200 OK

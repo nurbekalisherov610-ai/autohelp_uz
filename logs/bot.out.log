@@ -1,0 +1,4 @@
+{"asctime": "2026-04-18 22:27:45,066", "levelname": "INFO", "name": "src.core.startup", "message": "Dependencies are ready"}
+{"asctime": "2026-04-18 22:27:45,566", "levelname": "INFO", "name": "__main__", "message": "Starting bot polling"}
+{"asctime": "2026-04-18 22:27:45,607", "levelname": "INFO", "name": "aiogram.dispatcher", "message": "Start polling"}
+{"asctime": "2026-04-18 22:27:46,096", "levelname": "INFO", "name": "aiogram.dispatcher", "message": "Run polling for bot @AutoHelpUZ_bot id=8744729638 - 'AutoHelpUz_bot'"}

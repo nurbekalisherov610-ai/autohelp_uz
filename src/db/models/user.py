@@ -1,0 +1,17 @@
+from sqlalchemy import BigInteger, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from src.db.base import Base, TimestampMixin
+
+
+class User(Base, TimestampMixin):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    is_master: Mapped[bool] = mapped_column(default=False)
+
+    orders = relationship("Order", back_populates="client", lazy="selectin")
