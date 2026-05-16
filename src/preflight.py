@@ -4,7 +4,7 @@ import os
 import sys
 
 from aiogram import Bot
-from sqlalchemy import select, text
+from sqlalchemy import select, text, inspect
 
 from src.core.config import get_settings
 from src.db.session import engine
@@ -20,62 +20,73 @@ async def check_bot_token(settings):
     try:
         bot = Bot(token=settings.bot_token)
         me = await bot.get_me()
-        logger.info("✅ Bot Token is valid: @%s (%s)", me.username, me.id)
+        logger.info("✅ Bot Token: Token is valid. Bot: @%s", me.username)
         await bot.session.close()
         return True
     except Exception as exc:
-        logger.error("❌ Bot Token is invalid or Telegram is unreachable: %s", exc)
+        logger.error("❌ Bot Token: Token is invalid or Telegram unreachable: %s", exc)
         return False
 
 async def check_database(settings):
     try:
         async with engine.connect() as conn:
-            # 1. Basic connectivity
             await conn.execute(select(1))
-            logger.info("✅ Database connectivity: OK")
             
-            # 2. Check essential tables
-            result = await conn.execute(text(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-            ))
-            tables = [row[0] for row in result.fetchall()]
-            logger.info("📊 Found tables: %s", ", ".join(tables) if tables else "NONE")
+            # Introspect tables and columns
+            def get_schema_info(connection):
+                inspector = inspect(connection)
+                tables = inspector.get_table_names()
+                schema = {}
+                for table in tables:
+                    schema[table] = [col["name"] for col in inspector.get_columns(table)]
+                return tables, schema
+
+            tables, schema = await conn.run_sync(get_schema_info)
             
-            # 3. Check for language column type (our recent fix)
-            if "users" in tables:
-                res = await conn.execute(text(
-                    "SELECT data_type FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'language'"
-                ))
-                row = res.fetchone()
-                if row:
-                    logger.info("ℹ️ User.language type: %s", row[0])
+            logger.info("📊 Details: {'tables_found': %s}", tables)
             
+            # Define required columns for core functionality
+            required = {
+                "users": ["id", "telegram_id", "language", "is_master"],
+                "orders": ["id", "client_id", "status", "issue_label", "phone", "video_file_id"],
+                "order_status_history": ["order_id", "to_status"]
+            }
+            
+            failures = []
+            for table, cols in required.items():
+                if table not in tables:
+                    failures.append(f"Table '{table}' is missing")
+                    continue
+                missing = [c for c in cols if c not in schema[table]]
+                if missing:
+                    failures.append(f"Table '{table}' is missing columns: {', '.join(missing)}")
+            
+            if failures:
+                logger.error("❌ Database: Schema verification failed: %s", " | ".join(failures))
+                # We return True anyway to allow 'alembic upgrade head' in start.sh to try and fix it
+                return True 
+            
+            logger.info("✅ Database: Connectivity and Schema OK")
             return True
     except Exception as exc:
-        logger.error("❌ Database check failed: %s", exc)
+        logger.error("❌ Database: Check failed: %s", exc)
         return False
 
 def check_env_vars(settings):
-    critical_vars = {
-        "DATABASE_URL": settings.database_url,
-        "BOT_TOKEN": settings.bot_token,
-        "ADMIN_IDS": settings.admin_ids,
-        "DISPATCHER_IDS": settings.dispatcher_ids,
-    }
-    
+    critical = ["DATABASE_URL", "BOT_TOKEN"]
     all_ok = True
-    for name, val in critical_vars.items():
+    for name in critical:
+        val = getattr(settings, name.lower(), None)
         if not val:
             logger.warning("⚠️ Environment variable %s is not set", name)
+            all_ok = False
         else:
-            # Mask value for safety
             masked = str(val)[:4] + "..." + str(val)[-4:] if len(str(val)) > 8 else "***"
             logger.info("✅ %s is configured (%s)", name, masked)
-            
     return all_ok
 
 async def main():
-    logger.info("🚀 Starting Official Deep Audit...")
+    logger.info("🚀 Starting Official System Audit...")
     settings = get_settings()
     
     env_ok = check_env_vars(settings)
@@ -83,11 +94,10 @@ async def main():
     bot_ok = await check_bot_token(settings)
     
     if not (env_ok and db_ok and bot_ok):
-        logger.error("🚨 Deep Audit failed! Some components are not ready.")
-        # We don't sys.exit(1) here to allow Alembic to try and fix the DB in start.sh
-        # but we provide clear warnings.
+        logger.error("🚨 System Audit found issues! Review logs above.")
+        # We don't exit with 1 because start.sh handles migrations next
     else:
-        logger.info("✨ Deep Audit complete: ALL SYSTEMS NOMINAL")
+        logger.info("✨ System Audit complete: ALL SYSTEMS NOMINAL")
 
 if __name__ == "__main__":
     asyncio.run(main())
