@@ -48,29 +48,47 @@ async def check_database() -> CheckResult:
             # 1. Check connectivity
             await conn.execute(text("SELECT 1"))
             
-            # 2. Check essential tables (User, Order)
+            # 2. Check essential tables and columns
             # This helps identify if migrations actually ran
             result = await conn.execute(text(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+                "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
             ))
-            tables = [row[0] for row in result.fetchall()]
+            schema_data = result.fetchall()
             
-            missing = []
-            for t in ["users", "orders", "order_status_history"]:
-                if t not in tables:
-                    missing.append(t)
+            # Map table -> set of columns
+            db_schema: dict[str, set[str]] = {}
+            for table_name, column_name in schema_data:
+                if table_name not in db_schema:
+                    db_schema[table_name] = set()
+                db_schema[table_name].add(column_name)
+            
+            required_tables = {
+                "users": {"id", "telegram_id", "language", "is_master"},
+                "orders": {"id", "client_id", "status", "video_file_id", "rating"},
+                "order_status_history": {"id", "order_id", "to_status"}
+            }
+            
+            errors = []
+            for table, req_cols in required_tables.items():
+                if table not in db_schema:
+                    errors.append(f"Table '{table}' is missing.")
+                else:
+                    found_cols = db_schema[table]
+                    missing_cols = req_cols - found_cols
+                    if missing_cols:
+                        errors.append(f"Table '{table}' is missing columns: {', '.join(missing_cols)}")
             
             await engine.dispose()
             
-            if missing:
+            if errors:
                 return CheckResult(
                     "Database", 
                     False, 
-                    f"Connected, but tables are missing: {', '.join(missing)}. Did you run migrations?",
-                    details={"tables_found": tables}
+                    "Schema verification failed: " + " | ".join(errors),
+                    details={"tables_found": list(db_schema.keys())}
                 )
                 
-            return CheckResult("Database", True, f"Connected and verified {len(tables)} tables.")
+            return CheckResult("Database", True, f"Connected and verified {len(db_schema)} tables with all required columns.")
     except Exception as exc:
         return CheckResult("Database", False, f"Connection failed: {exc}")
 

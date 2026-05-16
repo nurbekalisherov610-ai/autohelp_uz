@@ -24,6 +24,7 @@ from src.bot.keyboards.driver import (
 )
 from src.bot.states.driver_order import DriverQuickOrderState
 from src.core.config import get_settings
+from src.db.models.order import Order
 from src.db.models.user import User
 from src.db.session import AsyncSessionFactory
 from src.services.notification_service import NotificationService
@@ -109,6 +110,36 @@ TEXT: dict[str, dict[str, str]] = {
         "uz": "Buyurtmangiz qabul qilindi. ID: #{order_id}. Dispecher tez orada siz bilan bog'lanadi.",
         "ru": "Ваша заявка принята. ID: #{order_id}. Диспетчер скоро свяжется с вами.",
     },
+    "about_text": {
+        "uz": (
+            "🚀 **AutoHelp.uz** — Yo'ldagi tezkor yordam xizmati.\n\n"
+            "Biz sizga quyidagi holatlarda yordam beramiz:\n"
+            "• Avtomobil zavod bo'lmaganda\n"
+            "• Akkumulyator quvvati tugaganda\n"
+            "• Balon almashtirish kerak bo'lganda\n"
+            "• Va boshqa texnik nosozliklarda\n\n"
+            "📞 Aloqa: +998 (XX) XXX-XX-XX\n"
+            "📍 Hudud: Toshkent shahri va viloyati"
+        ),
+        "ru": (
+            "🚀 **AutoHelp.uz** — Служба быстрой помощи на дорогах.\n\n"
+            "Мы поможем вам в следующих случаях:\n"
+            "• Автомобиль не заводится\n"
+            "• Сел аккумулятор\n"
+            "• Нужно заменить колесо\n"
+            "• И другие технические проблемы\n\n"
+            "📞 Контакты: +998 (XX) XXX-XX-XX\n"
+            "📍 Регион: Ташкент и область"
+        ),
+    },
+    "no_active_orders": {
+        "uz": "Sizda hozircha faol buyurtmalar yo'q.",
+        "ru": "У вас пока нет активных заказов.",
+    },
+    "order_status_text": {
+        "uz": "Buyurtma #{id}\nHolati: {status}\nMuammo: {issue}\nYaratilgan: {date}",
+        "ru": "Заказ #{id}\nСтатус: {status}\nПроблема: {issue}\nСоздан: {date}",
+    },
 }
 
 
@@ -152,7 +183,7 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     try:
-        # 1. Database work FIRST. If this fails, we show the alert and STOP.
+        # 1. Database work FIRST.
         if callback.from_user is not None:
             async with AsyncSessionFactory() as session:
                 user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
@@ -173,7 +204,7 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await state.update_data(language=language)
 
-        # 3. UI work (only happens if DB was successful)
+        # 3. UI work
         msg = _safe_message(callback)
         if msg is not None:
             try:
@@ -184,7 +215,6 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
 
     except Exception as exc:
         logger.exception("CRITICAL: choose_language DB error: %s", exc)
-        # This alert matches the screenshot. It happens if the database is down or tables are missing.
         await callback.answer("Texnik xatolik yuz berdi.", show_alert=True)
         return
 
@@ -194,12 +224,57 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(Command("cancel"))
 @router.message(F.text.in_(CANCEL_BUTTONS))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    current_state = await state.get_state()
-    if current_state is None:
-        return
     language = await _state_language(state, message.from_user.id if message.from_user else None)
     await state.clear()
+    await state.update_data(language=language)
     await message.answer(_t(language, "cancelled"), reply_markup=start_keyboard(language))
+
+
+@router.message(F.text.in_(set(BUTTONS["change_lang"].values())))
+async def cmd_change_lang(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DriverQuickOrderState.language)
+    await message.answer(TEXT["choose_language"]["uz"], reply_markup=language_keyboard())
+
+
+@router.message(F.text.in_(set(BUTTONS["about"].values())))
+async def cmd_about(message: Message, state: FSMContext) -> None:
+    language = await _state_language(state, message.from_user.id if message.from_user else None)
+    await message.answer(_t(language, "about_text"), parse_mode="Markdown")
+
+
+@router.message(F.text.in_(set(BUTTONS["order_status"].values())))
+async def cmd_order_status(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    language = await _state_language(state, message.from_user.id)
+    
+    async with AsyncSessionFactory() as session:
+        # Find latest active order for this user
+        query = (
+            select(Order)
+            .join(User)
+            .where(User.telegram_id == message.from_user.id)
+            .order_by(Order.created_at.desc())
+            .limit(1)
+        )
+        res = await session.execute(query)
+        order = res.scalar_one_or_none()
+        
+    if not order:
+        await message.answer(_t(language, "no_active_orders"))
+        return
+        
+    await message.answer(
+        _t(
+            language, 
+            "order_status_text",
+            id=order.id,
+            status=order.status.name,
+            issue=order.issue_label,
+            date=order.created_at.strftime("%Y-%m-%d %H:%M"),
+        )
+    )
 
 
 @router.message(Command("new_order"))
@@ -299,6 +374,7 @@ async def location_validation_hint(message: Message, state: FSMContext) -> None:
 async def cancel_order(callback: CallbackQuery, state: FSMContext) -> None:
     language = await _state_language(state, callback.from_user.id if callback.from_user else None)
     await state.clear()
+    await state.update_data(language=language)
     msg = _safe_message(callback)
     if msg is not None:
         try:
@@ -311,7 +387,6 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(DriverQuickOrderState.confirm, F.data == "order_confirm")
 async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
-    # 1. Immediate answer to stop the "clock" icon
     await callback.answer("Buyurtma yuborilmoqda... / Заявка отправляется...")
     
     language = await _state_language(state, callback.from_user.id if callback.from_user else None)
@@ -327,14 +402,14 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
     if not required_fields.issubset(data):
         await callback.answer("Buyurtma ma'lumotlari to'liq emas. Qayta boshlang.", show_alert=True)
         await state.clear()
+        await state.update_data(language=language)
         return
 
-    # 2. Provide immediate feedback and prevent double-clicks by updating the UI
+    # 2. Provide immediate feedback
     msg = _safe_message(callback)
     original_text = msg.text if msg else ""
     if msg:
         try:
-            # We add a bold processing indicator to the top of the message
             await msg.edit_text(f"⏳ **Buyurtma yuborilmoqda...**\n\n{original_text}", parse_mode="Markdown")
         except Exception:
             pass
@@ -343,7 +418,6 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
             
-            # Create the order in the database
             order = await service.create_driver_order(
                 DriverOrderPayload(
                     client_telegram_id=callback.from_user.id,
@@ -356,10 +430,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
                 )
             )
 
-            # Notifications (each has its own internal try/except for resilience)
             alert_service = NotificationService(bot=callback.bot, settings=settings)
-            
-            # Notify Dispatcher(s)
             await alert_service.notify_new_order(
                 order_id=order.id,
                 client_telegram_id=callback.from_user.id,
@@ -368,12 +439,10 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
                 latitude=float(data["latitude"]),
                 longitude=float(data["longitude"]),
             )
-            
-            # Notify Client (Confirmation video + text)
             await alert_service.notify_client_order_created(order)
 
-        # 3. Success! Clear FSM state and update UI
         await state.clear()
+        await state.update_data(language=language)
         if msg:
             try:
                 await msg.edit_text(_t(language, "order_created", order_id=order.id))
@@ -385,7 +454,6 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
         logger.exception("CRITICAL: confirm_order failed: %s", exc)
         if msg:
             try:
-                # Restore original text with a clear error hint so user knows it failed
                 error_hint = "\n\n❌ **Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.**"
                 await msg.edit_text(
                     f"{original_text}{error_hint}", 

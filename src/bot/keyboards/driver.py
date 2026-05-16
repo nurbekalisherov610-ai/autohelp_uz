@@ -10,39 +10,51 @@ DEFAULT_LANGUAGE = "uz"
 
 BUTTONS: dict[str, dict[str, str]] = {
     "start_order": {
-        "uz": "Tez yordam chaqirish",
-        "ru": "Вызвать помощь",
+        "uz": "🚀 Tez yordam chaqirish",
+        "ru": "🚀 Вызвать помощь",
+    },
+    "order_status": {
+        "uz": "📋 Buyurtma holati",
+        "ru": "📋 Статус заказа",
+    },
+    "about": {
+        "uz": "ℹ️ Biz haqimizda",
+        "ru": "ℹ️ О нас",
+    },
+    "change_lang": {
+        "uz": "🇺🇿/🇷🇺 Tilni o'zgartirish",
+        "ru": "🇺🇿/🇷🇺 Сменить язык",
     },
     "phone": {
-        "uz": "Raqamni yuborish",
-        "ru": "Отправить номер",
+        "uz": "📞 Raqamni yuborish",
+        "ru": "📞 Отправить номер",
     },
     "location": {
-        "uz": "Lokatsiyani yuborish",
-        "ru": "Отправить локацию",
+        "uz": "📍 Lokatsiyani yuborish",
+        "ru": "📍 Отправить локацию",
     },
     "cancel": {
         "uz": "❌ Bekor qilish",
         "ru": "❌ Отменить",
     },
     "confirm": {
-        "uz": "Tasdiqlash",
-        "ru": "Подтвердить",
+        "uz": "✅ Tasdiqlash",
+        "ru": "✅ Подтвердить",
     },
 }
 
 ISSUE_OPTIONS_BY_LANG: dict[str, list[str]] = {
     "uz": [
-        "Zavod bo'lmayapti",
-        "Akkumulyator o'tirgan",
-        "Balon yorilgan",
-        "Boshqa muammo",
+        "🛠 Zavod bo'lmayapti",
+        "🔋 Akkumulyator o'tirgan",
+        "🎈 Balon yorilgan",
+        "❓ Boshqa muammo",
     ],
     "ru": [
-        "Не заводится",
-        "Сел аккумулятор",
-        "Пробито колесо",
-        "Другая проблема",
+        "🛠 Не заводится",
+        "🔋 Сел аккумулятор",
+        "🎈 Пробито колесо",
+        "❓ Другая проблема",
     ],
 }
 
@@ -89,7 +101,14 @@ def language_keyboard() -> InlineKeyboardMarkup:
 
 def start_keyboard(language: str | None = None) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=button("start_order", language))]],
+        keyboard=[
+            [KeyboardButton(text=button("start_order", language))],
+            [
+                KeyboardButton(text=button("order_status", language)),
+                KeyboardButton(text=button("about", language)),
+            ],
+            [KeyboardButton(text=button("change_lang", language))],
+        ],
         resize_keyboard=True,
     )
 
