@@ -1,4 +1,4 @@
-﻿FROM python:3.11-slim
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -14,7 +14,9 @@ COPY pyproject.toml README.md /app/
 COPY src /app/src
 COPY alembic.ini /app/alembic.ini
 COPY alembic /app/alembic
+COPY start.sh /app/start.sh
 
 RUN pip install --upgrade pip && pip install .
+RUN chmod +x /app/start.sh
 
-CMD ["python", "-m", "src.api.app"]
+CMD ["/app/start.sh"]

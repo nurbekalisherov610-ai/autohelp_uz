@@ -159,9 +159,11 @@ async def get_summary_stats() -> dict[str, object]:
 
 
 if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", settings.api_port))
     uvicorn.run(
         "src.api.app:app",
-        host=settings.api_host,
-        port=settings.api_port,
+        host="0.0.0.0",
+        port=port,
         reload=False,
     )
