@@ -8,6 +8,7 @@ Create Date: 2026-05-16
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -19,6 +20,8 @@ depends_on: str | Sequence[str] | None = None
 
 def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return False
     return any(column["name"] == column_name for column in inspector.get_columns(table_name))
 
 

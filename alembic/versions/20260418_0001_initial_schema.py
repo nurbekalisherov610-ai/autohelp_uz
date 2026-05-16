@@ -7,8 +7,9 @@ Create Date: 2026-04-18
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "20260418_0001"
@@ -51,6 +52,18 @@ def _has_index(table_name: str, index_name: str) -> bool:
     return any(index["name"] == index_name for index in inspector.get_indexes(table_name))
 
 
+def _has_column(table_name: str, column_name: str) -> bool:
+    if not _has_table(table_name):
+        return False
+    inspector = sa.inspect(op.get_bind())
+    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+
+
+def _ensure_column(table_name: str, column: sa.Column) -> None:
+    if not _has_column(table_name, column.name):
+        op.add_column(table_name, column)
+
+
 def upgrade() -> None:
     if not _has_table("users"):
         op.create_table(
@@ -65,7 +78,11 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint("id", name="pk_users"),
             sa.UniqueConstraint("telegram_id", name="uq_users_telegram_id"),
         )
-    if not _has_index("users", "ix_users_telegram_id"):
+    else:
+        _ensure_column("users", sa.Column("phone", sa.String(length=32), nullable=True))
+        _ensure_column("users", sa.Column("language", sa.String(length=10), nullable=True))
+
+    if _has_column("users", "telegram_id") and not _has_index("users", "ix_users_telegram_id"):
         op.create_index("ix_users_telegram_id", "users", ["telegram_id"], unique=False)
 
     if not _has_table("orders"):
@@ -88,9 +105,27 @@ def upgrade() -> None:
             sa.ForeignKeyConstraint(["client_id"], ["users.id"], name="fk_orders_client_id_users", ondelete="RESTRICT"),
             sa.PrimaryKeyConstraint("id", name="pk_orders"),
         )
-    if not _has_index("orders", "ix_orders_status"):
+    else:
+        # Legacy deployments may already have an `orders` table created manually or
+        # through an earlier schema bootstrap, but without later nullable columns.
+        # Add those before creating indexes so `alembic upgrade head` can heal the DB.
+        _ensure_column(
+            "orders",
+            sa.Column("assigned_dispatcher_telegram_id", sa.BigInteger(), nullable=True),
+        )
+        _ensure_column(
+            "orders",
+            sa.Column("assigned_master_telegram_id", sa.BigInteger(), nullable=True),
+        )
+        _ensure_column("orders", sa.Column("final_amount", sa.Numeric(12, 2), nullable=True))
+        _ensure_column("orders", sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True))
+
+    if _has_column("orders", "status") and not _has_index("orders", "ix_orders_status"):
         op.create_index("ix_orders_status", "orders", ["status"], unique=False)
-    if not _has_index("orders", "ix_orders_assigned_master_telegram_id"):
+    if (
+        _has_column("orders", "assigned_master_telegram_id")
+        and not _has_index("orders", "ix_orders_assigned_master_telegram_id")
+    ):
         op.create_index(
             "ix_orders_assigned_master_telegram_id",
             "orders",
@@ -111,7 +146,10 @@ def upgrade() -> None:
             sa.ForeignKeyConstraint(["order_id"], ["orders.id"], name="fk_order_status_history_order_id_orders", ondelete="CASCADE"),
             sa.PrimaryKeyConstraint("id", name="pk_order_status_history"),
         )
-    if not _has_index("order_status_history", "ix_order_status_history_order_id_id"):
+    if (
+        _has_column("order_status_history", "order_id")
+        and not _has_index("order_status_history", "ix_order_status_history_order_id_id")
+    ):
         op.create_index(
             "ix_order_status_history_order_id_id",
             "order_status_history",
