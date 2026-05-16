@@ -2,6 +2,20 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PLACEHOLDER_CHAT_IDS = {-1000000000000}
+
+
+def _parse_int_list(value: str | None) -> list[int]:
+    if not value:
+        return []
+
+    ids: list[int] = []
+    for raw in value.split(","):
+        item = raw.strip()
+        if item.lstrip("-").isdigit():
+            ids.append(int(item))
+    return ids
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -19,6 +33,10 @@ class Settings(BaseSettings):
     master_ids: str | None = None            # comma-separated list of master telegram IDs
     master_labels: str | None = None         # comma-separated labels for masters
     master_secret: str = "master123"         # secret code to self-register as master
+    dispatcher_confirm_video_kind: str | None = None
+    dispatcher_confirm_video_uz: str | None = None
+    dispatcher_confirm_video_ru: str | None = None
+    dispatcher_confirm_video_en: str | None = None
 
     postgres_host: str = "localhost"
     postgres_port: int = 5432
@@ -41,6 +59,24 @@ class Settings(BaseSettings):
     dependency_wait_delay_seconds: float = 2.0
 
     @property
+    def parsed_dispatcher_ids(self) -> list[int]:
+        return _parse_int_list(self.dispatcher_ids)
+
+    @property
+    def parsed_admin_ids(self) -> list[int]:
+        return _parse_int_list(self.admin_ids)
+
+    @property
+    def parsed_master_ids(self) -> list[int]:
+        return _parse_int_list(self.master_ids)
+
+    @property
+    def parsed_master_labels(self) -> list[str]:
+        if not self.master_labels:
+            return []
+        return [label.strip() for label in self.master_labels.split(",")]
+
+    @property
     def postgres_dsn(self) -> str:
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
@@ -49,18 +85,29 @@ class Settings(BaseSettings):
 
     @property
     def resolved_dispatcher_chat_id(self) -> int | None:
-        """Return dispatcher_chat_id, falling back to the first value in
-        dispatcher_ids, then to dispatcher_group_id."""
-        if self.dispatcher_chat_id is not None:
-            return self.dispatcher_chat_id
-        if self.dispatcher_ids:
-            first = self.dispatcher_ids.split(",")[0].strip()
-            if first:
-                try:
-                    return int(first)
-                except ValueError:
-                    pass
-        return self.dispatcher_group_id
+        """Return the best chat destination for dispatcher alerts.
+
+        Railway often has both DISPATCHER_IDS (allowed people) and
+        DISPATCHER_GROUP_ID (operations room). Prefer the group for alerts,
+        ignore template placeholders, then fall back to a direct dispatcher id.
+        """
+        candidates = [
+            self.dispatcher_group_id,
+            self.dispatcher_chat_id,
+            self.parsed_dispatcher_ids[0] if self.parsed_dispatcher_ids else None,
+        ]
+        for candidate in candidates:
+            if candidate is not None and candidate not in PLACEHOLDER_CHAT_IDS:
+                return candidate
+        return None
+
+    def confirmation_video_file_id(self, language: str | None) -> str | None:
+        lang = (language or "uz").lower()
+        if lang.startswith("ru"):
+            return self.dispatcher_confirm_video_ru or self.dispatcher_confirm_video_uz
+        if lang.startswith("en"):
+            return self.dispatcher_confirm_video_en or self.dispatcher_confirm_video_uz
+        return self.dispatcher_confirm_video_uz or self.dispatcher_confirm_video_ru
 
     @property
     def resolved_database_dsn(self) -> str:

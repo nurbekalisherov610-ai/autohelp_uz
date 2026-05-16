@@ -19,28 +19,60 @@ from src.services.order_service import (
 router = Router(name="dispatcher_orders")
 settings = get_settings()
 
-def _is_dispatcher(user_id: int) -> bool:
-    """Check if user is any known dispatcher (by IDs list, group ID, or direct chat ID)."""
-    resolved = settings.resolved_dispatcher_chat_id
-    # Allow all if nothing is configured (dev mode)
-    if resolved is None:
+
+def _dispatcher_user_ids() -> set[int]:
+    ids = set(settings.parsed_dispatcher_ids)
+    if settings.dispatcher_chat_id and settings.dispatcher_chat_id > 0:
+        ids.add(settings.dispatcher_chat_id)
+    return ids
+
+
+def _dispatcher_chat_ids() -> set[int]:
+    return {
+        chat_id
+        for chat_id in (settings.dispatcher_group_id, settings.dispatcher_chat_id)
+        if chat_id is not None
+    }
+
+
+def _is_dispatcher_context(chat_id: int, user_id: int | None) -> bool:
+    user_ids = _dispatcher_user_ids()
+    chat_ids = _dispatcher_chat_ids()
+    if not user_ids and not chat_ids and settings.resolved_dispatcher_chat_id is None:
         return True
-    # Check direct match
-    if user_id == resolved:
+    if user_id is not None and user_id in user_ids:
         return True
-    # Check comma-separated DISPATCHER_IDS list
-    if settings.dispatcher_ids:
-        ids = {int(x.strip()) for x in settings.dispatcher_ids.split(",") if x.strip().lstrip("-").isdigit()}
-        if user_id in ids:
-            return True
+    if not user_ids and chat_id in chat_ids:
+        return True
     return False
 
-def _is_dispatcher_chat(chat_id: int) -> bool:
-    """Allow if chat matches any known dispatcher destination."""
-    resolved = settings.resolved_dispatcher_chat_id
-    if resolved is None:
-        return True
-    return chat_id == resolved or _is_dispatcher(chat_id)
+
+def _is_dispatcher_message(message: Message) -> bool:
+    return _is_dispatcher_context(
+        chat_id=message.chat.id,
+        user_id=message.from_user.id if message.from_user else None,
+    )
+
+
+def _is_dispatcher_callback(callback: CallbackQuery) -> bool:
+    if callback.message is None:
+        return False
+    return _is_dispatcher_context(
+        chat_id=callback.message.chat.id,
+        user_id=callback.from_user.id if callback.from_user else None,
+    )
+
+
+def _configured_master_label(master_id: int) -> str:
+    ids = settings.parsed_master_ids
+    labels = settings.parsed_master_labels
+    try:
+        index = ids.index(master_id)
+    except ValueError:
+        return str(master_id)
+    if index < len(labels) and labels[index]:
+        return labels[index]
+    return str(master_id)
 
 def _order_card_text(order_id: int, phone: str, issue_label: str, latitude: float, longitude: float, status_name: str) -> str:
     return (
@@ -65,7 +97,7 @@ def _assign_kb(order_id: int) -> InlineKeyboardMarkup:
 
 @router.message(Command("new_orders"))
 async def list_new_orders(message: Message) -> None:
-    if not _is_dispatcher_chat(message.chat.id):
+    if not _is_dispatcher_message(message):
         return
 
     async with AsyncSessionFactory() as session:
@@ -92,7 +124,8 @@ async def list_new_orders(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("dispatch_assign:"))
 async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
-    if not _is_dispatcher_chat(callback.message.chat.id):
+    if not _is_dispatcher_callback(callback):
+        await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
     order_id = int(callback.data.split(":")[1])
@@ -109,7 +142,16 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
                 )
                 return
 
-            masters = (await session.scalars(select(User).where(User.is_master))).all()
+            db_masters = list((await session.scalars(select(User).where(User.is_master))).all())
+            master_by_id = {master.telegram_id: master for master in db_masters}
+            for configured_id in settings.parsed_master_ids:
+                if configured_id not in master_by_id:
+                    master_by_id[configured_id] = User(
+                        telegram_id=configured_id,
+                        full_name=_configured_master_label(configured_id),
+                        is_master=True,
+                    )
+            masters = list(master_by_id.values())
 
             active_counts_query = (
                 select(Order.assigned_master_telegram_id, func.count(Order.id))
@@ -125,7 +167,7 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
 
     if not masters:
         await callback.answer(
-            "Tizimda birorta ham Master ro'yxatdan o'tmagan! /register_master orqali qo'shing.",
+            "Tizimda birorta ham Master yo'q. MASTER_IDS sozlang yoki /register_master orqali qo'shing.",
             show_alert=True,
         )
         return
@@ -153,7 +195,8 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("select_master:"))
 async def cb_select_master(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_chat(callback.message.chat.id):
+    if not _is_dispatcher_callback(callback):
+        await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
     parts = callback.data.split(":")
@@ -191,7 +234,8 @@ async def cb_select_master(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("dispatch_complete:"))
 async def cb_complete_order(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_chat(callback.message.chat.id):
+    if not _is_dispatcher_callback(callback):
+        await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
     order_id = int(callback.data.split(":")[1])
@@ -228,7 +272,8 @@ async def cb_complete_order(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("dispatch_cancel:"))
 async def cb_cancel_order(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_chat(callback.message.chat.id):
+    if not _is_dispatcher_callback(callback):
+        await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
     order_id = int(callback.data.split(":")[1])
@@ -252,7 +297,7 @@ async def cb_cancel_order(callback: CallbackQuery) -> None:
 
 @router.message(Command("dashboard"))
 async def cmd_dashboard(message: Message) -> None:
-    if not _is_dispatcher_chat(message.chat.id):
+    if not _is_dispatcher_message(message):
         return
 
     async with AsyncSessionFactory() as session:
@@ -291,7 +336,7 @@ async def cmd_dashboard(message: Message) -> None:
 
 @router.message(Command("order"))
 async def cmd_order_detail(message: Message) -> None:
-    if not _is_dispatcher_chat(message.chat.id):
+    if not _is_dispatcher_message(message):
         return
 
     parts = (message.text or "").split()
@@ -361,7 +406,7 @@ async def cmd_order_detail(message: Message) -> None:
 
 @router.message(Command("active_orders"))
 async def cmd_active_orders(message: Message) -> None:
-    if not _is_dispatcher_chat(message.chat.id):
+    if not _is_dispatcher_message(message):
         return
 
     async with AsyncSessionFactory() as session:
@@ -404,7 +449,8 @@ async def cmd_active_orders(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("dispatch_detail:"))
 async def cb_order_detail_inline(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_chat(callback.message.chat.id):
+    if not _is_dispatcher_callback(callback):
+        await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
     order_id = int(callback.data.split(":")[1])

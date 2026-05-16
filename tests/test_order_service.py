@@ -41,6 +41,26 @@ async def test_create_driver_order_creates_user_order_and_history(session):
 
 
 @pytest.mark.asyncio
+async def test_create_driver_order_accepts_russian_issue_labels(session):
+    service = OrderService(session)
+
+    order = await service.create_driver_order(
+        DriverOrderPayload(
+            client_telegram_id=112,
+            full_name="Ivan",
+            language="ru",
+            phone="+998901112244",
+            issue_label="Сел аккумулятор",
+            latitude=41.311081,
+            longitude=69.240562,
+        )
+    )
+
+    assert order.status == OrderStatus.NEW
+    assert order.issue_type.value == "BATTERY_DOWN"
+
+
+@pytest.mark.asyncio
 async def test_full_lifecycle_happy_path(session):
     service = OrderService(session)
 
@@ -89,6 +109,44 @@ async def test_full_lifecycle_happy_path(session):
     assert order.status == OrderStatus.COMPLETED
     assert order.final_amount == Decimal("275000")
     assert order.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_master_completion_stores_video_and_amount(session):
+    service = OrderService(session)
+    order = await service.create_driver_order(
+        DriverOrderPayload(
+            client_telegram_id=556,
+            full_name="Driver",
+            language="uz",
+            phone="+998900000005",
+            issue_label="Boshqa muammo",
+            latitude=41.4,
+            longitude=69.4,
+        )
+    )
+
+    dispatcher_id = 5005
+    master_id = 7006
+
+    await service.assign_order(order.id, dispatcher_id)
+    await service.assign_master(order.id, dispatcher_id, master_id)
+    await service.master_transition(order.id, master_id, OrderStatus.ACCEPTED)
+    await service.master_transition(order.id, master_id, OrderStatus.ON_THE_WAY)
+    await service.master_transition(order.id, master_id, OrderStatus.ARRIVED)
+    await service.master_transition(order.id, master_id, OrderStatus.IN_PROGRESS)
+
+    order = await service.master_transition(
+        order.id,
+        master_id,
+        OrderStatus.AWAITING_CONFIRM,
+        video_file_id="video-note-file-id",
+        final_amount=125000,
+    )
+
+    assert order.status == OrderStatus.AWAITING_CONFIRM
+    assert order.video_file_id == "video-note-file-id"
+    assert order.final_amount == Decimal("125000")
 
 
 @pytest.mark.asyncio
