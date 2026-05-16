@@ -325,6 +325,9 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(DriverQuickOrderState.confirm, F.data == "order_confirm")
 async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
+    # 1. Immediate answer to stop the "clock" icon
+    await callback.answer("Buyurtma yuborilmoqda... / Заявка отправляется...")
+    
     language = await _state_language(state, callback.from_user.id if callback.from_user else None)
     if callback.from_user is None:
         await callback.answer(_t(language, "user_missing"), show_alert=True)
@@ -363,8 +366,11 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
             longitude=float(data["longitude"]),
         )
         await alert_service.notify_client_order_created(order)
-    except Exception:
+    except Exception as exc:
+        logger.exception("CRITICAL: confirm_order failed for user %s: %s", 
+                         callback.from_user.id if callback.from_user else "unknown", exc)
         await callback.answer("Texnik xatolik yuz berdi. Iltimos qayta urinib ko'ring.", show_alert=True)
+        # We don't clear state here so they can try again if it was a transient network error
         return
 
     await state.clear()
