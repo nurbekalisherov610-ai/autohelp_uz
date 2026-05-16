@@ -14,7 +14,7 @@ from src.db.models import user as _user_model  # noqa: F401
 
 config = context.config
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.postgres_dsn)
+config.set_main_option("sqlalchemy.url", settings.resolved_database_dsn.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

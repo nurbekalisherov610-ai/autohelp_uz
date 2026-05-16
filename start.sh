@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 echo "Running preflight checks..."
 python -m src.preflight || echo "[WARN] Preflight check had failures - review logs above"
