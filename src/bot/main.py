@@ -6,6 +6,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
+from src.bot.handlers.admin import router as admin_router
 from src.bot.handlers.cancel import router as cancel_router
 from src.bot.handlers.client_feedback import router as client_feedback_router
 from src.bot.handlers.dispatcher_orders import router as dispatcher_orders_router
@@ -34,6 +35,7 @@ def setup_dispatcher() -> tuple[Dispatcher, Redis | None]:
     dp.message.middleware(ThrottlingMiddleware(rate_limit=1.5))
     dp.callback_query.middleware(ThrottlingMiddleware(rate_limit=1.5))
     dp.message.middleware(TypingMiddleware())
+    dp.include_router(admin_router)
     dp.include_router(cancel_router)
     dp.include_router(errors_router)
     dp.include_router(dispatcher_orders_router)

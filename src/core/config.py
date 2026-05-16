@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     dispatcher_ids: str | None = None        # comma-separated list e.g. "123456789,987654321"
     dispatcher_group_id: int | None = None
     admin_chat_id: int | None = None
+    admin_ids: str | None = None             # comma-separated admin telegram IDs
     master_ids: str | None = None            # comma-separated list of master telegram IDs
     master_labels: str | None = None         # comma-separated labels for masters
+    master_secret: str = "master123"         # secret code to self-register as master
 
     postgres_host: str = "localhost"
     postgres_port: int = 5432

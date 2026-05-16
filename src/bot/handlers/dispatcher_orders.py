@@ -19,10 +19,28 @@ from src.services.order_service import (
 router = Router(name="dispatcher_orders")
 settings = get_settings()
 
-def _is_dispatcher_chat(chat_id: int) -> bool:
-    if settings.dispatcher_chat_id is None:
+def _is_dispatcher(user_id: int) -> bool:
+    """Check if user is any known dispatcher (by IDs list, group ID, or direct chat ID)."""
+    resolved = settings.resolved_dispatcher_chat_id
+    # Allow all if nothing is configured (dev mode)
+    if resolved is None:
         return True
-    return chat_id == settings.dispatcher_chat_id
+    # Check direct match
+    if user_id == resolved:
+        return True
+    # Check comma-separated DISPATCHER_IDS list
+    if settings.dispatcher_ids:
+        ids = {int(x.strip()) for x in settings.dispatcher_ids.split(",") if x.strip().lstrip("-").isdigit()}
+        if user_id in ids:
+            return True
+    return False
+
+def _is_dispatcher_chat(chat_id: int) -> bool:
+    """Allow if chat matches any known dispatcher destination."""
+    resolved = settings.resolved_dispatcher_chat_id
+    if resolved is None:
+        return True
+    return chat_id == resolved or _is_dispatcher(chat_id)
 
 def _order_card_text(order_id: int, phone: str, issue_label: str, latitude: float, longitude: float, status_name: str) -> str:
     return (

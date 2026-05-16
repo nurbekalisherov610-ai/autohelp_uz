@@ -66,9 +66,15 @@ async def master_help(message: Message) -> None:
 
 @router.message(Command("register_master"))
 async def register_master(message: Message) -> None:
-    args = message.text.split()
-    if len(args) < 2 or args[1] != "master123":
-        await message.answer("Maxfiy kod xato. Format: /register_master maxfiykod")
+    from src.core.config import get_settings as _get_settings
+    _settings = _get_settings()
+
+    # Determine valid secrets: master_secret env var, or fallback "master123"
+    valid_secret = getattr(_settings, "master_secret", None) or "master123"
+
+    args = message.text.split() if message.text else []
+    if len(args) < 2 or args[1] != valid_secret:
+        await message.answer("Maxfiy kod xato. Format: /register_master <maxfiykod>")
         return
 
     from sqlalchemy import select
@@ -84,7 +90,15 @@ async def register_master(message: Message) -> None:
             await session.commit()
             await message.answer("✅ Siz muvaffaqiyatli Master sifatida ro'yxatdan o'tdingiz!")
         else:
-            await message.answer("Sizning profilingiz topilmadi, iltimos /start bosing.")
+            # Auto-create user if not registered yet
+            new_user = User(
+                telegram_id=message.from_user.id,
+                full_name=message.from_user.full_name,
+                is_master=True,
+            )
+            session.add(new_user)
+            await session.commit()
+            await message.answer("✅ Profil yaratildi va Master sifatida ro'yxatdan o'tdingiz!")
 
 @router.message(Command("my_jobs"))
 async def my_jobs(message: Message) -> None:
