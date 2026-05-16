@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import Select, select
@@ -244,7 +244,7 @@ class OrderService:
                 order.final_amount = Decimal(str(final_amount))
             elif order.final_amount is None:
                 raise InvalidOrderTransitionError("final_amount is required for COMPLETED")
-            order.completed_at = datetime.now(UTC)
+            order.completed_at = datetime.now(timezone.utc)
 
         await self._change_status(order, to_status=to_status, actor_telegram_id=dispatcher_telegram_id)
         return order
