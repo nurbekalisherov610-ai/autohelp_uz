@@ -7,9 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InaccessibleMessage, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 
-logger = logging.getLogger(__name__)
-
-from src.core.config import PLACEHOLDER_CHAT_IDS, get_settings
+from src.bot.utils.permissions import is_dispatcher
+from src.core.config import get_settings
 from src.db.enums import OrderStatus
 from src.db.models.order import Order
 from src.db.models.user import User
@@ -20,72 +19,9 @@ from src.services.order_service import (
     OrderService,
 )
 
+logger = logging.getLogger(__name__)
 router = Router(name="dispatcher_orders")
 settings = get_settings()
-
-
-def _dispatcher_user_ids() -> set[int]:
-    """Return set of user IDs allowed to perform dispatcher actions."""
-    ids = set(settings.parsed_dispatcher_ids)
-    # Admins also get dispatcher permissions (Superadmins)
-    ids.update(settings.parsed_admin_ids)
-    
-    if settings.dispatcher_chat_id and settings.dispatcher_chat_id > 0:
-        ids.add(settings.dispatcher_chat_id)
-    if settings.admin_chat_id and settings.admin_chat_id > 0:
-        ids.add(settings.admin_chat_id)
-        
-    return {i for i in ids if i and i not in PLACEHOLDER_CHAT_IDS}
-
-
-def _dispatcher_chat_ids() -> set[int]:
-    return {
-        chat_id
-        for chat_id in (settings.dispatcher_group_id, settings.dispatcher_chat_id)
-        if chat_id is not None
-    }
-
-
-def _is_dispatcher_context(chat_id: int, user_id: int | None) -> bool:
-    """Check if the current message/callback comes from an authorized dispatcher context."""
-    user_ids = _dispatcher_user_ids()
-    chat_ids = _dispatcher_chat_ids()
-    
-    # If no restrictions configured, allow everyone (dev mode)
-    if not user_ids and not chat_ids and settings.resolved_dispatcher_chat_id is None:
-        return True
-        
-    # 1. Check if specific user is an authorized dispatcher/admin
-    if user_id is not None and user_id in user_ids:
-        return True
-        
-    # 2. Check if interaction is happening within an authorized group chat
-    # (Only if no specific user whitelist is strictly enforced, or if user is unknown)
-    if chat_id in chat_ids:
-        return True
-        
-    return False
-
-
-def _is_dispatcher_message(message: Message) -> bool:
-    return _is_dispatcher_context(
-        chat_id=message.chat.id,
-        user_id=message.from_user.id if message.from_user else None,
-    )
-
-
-def _is_dispatcher_callback(callback: CallbackQuery) -> bool:
-    msg = _safe_message(callback)
-    if msg is None:
-        # Fallback: if message is inaccessible, check user-only context
-        user_id = callback.from_user.id if callback.from_user else None
-        if user_id is not None and user_id in _dispatcher_user_ids():
-            return True
-        return False
-    return _is_dispatcher_context(
-        chat_id=msg.chat.id,
-        user_id=callback.from_user.id if callback.from_user else None,
-    )
 
 
 def _configured_master_label(master_id: int) -> str:
@@ -99,8 +35,8 @@ def _configured_master_label(master_id: int) -> str:
         return labels[index]
     return str(master_id)
 
+
 def _safe_message(callback: CallbackQuery) -> Message | None:
-    """Return the real Message object or None if the message is inaccessible."""
     msg = callback.message
     if msg is None or isinstance(msg, InaccessibleMessage):
         return None
@@ -116,6 +52,7 @@ def _order_card_text(order_id: int, phone: str, issue_label: str, latitude: floa
         f"Status: {status_name}"
     )
 
+
 def _assign_kb(order_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -128,9 +65,10 @@ def _assign_kb(order_id: int) -> InlineKeyboardMarkup:
         ]
     )
 
+
 @router.message(Command("new_orders"))
 async def list_new_orders(message: Message) -> None:
-    if not _is_dispatcher_message(message):
+    if not is_dispatcher(message.from_user.id if message.from_user else None, message.chat.id):
         return
 
     async with AsyncSessionFactory() as session:
@@ -155,9 +93,10 @@ async def list_new_orders(message: Message) -> None:
             reply_markup=_assign_kb(order.id),
         )
 
+
 @router.callback_query(F.data.startswith("dispatch_assign:"))
 async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
-    if not _is_dispatcher_callback(callback):
+    if not is_dispatcher(callback.from_user.id if callback.from_user else None, callback.message.chat.id if callback.message else None):
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
@@ -166,25 +105,13 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Xabar eskirgan. Qayta harakat qiling.", show_alert=True)
         return
 
-    if not callback.data:
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
-        return
     try:
         order_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
-        return
-
-    # Verify order still exists and is assignable before showing master list
-    try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
             order = await service.get_order(order_id)
             if order.status not in (OrderStatus.NEW, OrderStatus.REJECTED):
-                await callback.answer(
-                    f"Buyurtma #{order_id} allaqachon qabul qilingan ({order.status.name}).",
-                    show_alert=True,
-                )
+                await callback.answer(f"Buyurtma #{order_id} allaqachon qabul qilingan.", show_alert=True)
                 return
 
             db_masters = list((await session.scalars(select(User).where(User.is_master))).all())
@@ -198,23 +125,18 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
                     )
             masters = list(master_by_id.values())
 
-            active_counts_query = (
+            counts_res = await session.execute(
                 select(Order.assigned_master_telegram_id, func.count(Order.id))
                 .where(Order.status.in_(MASTER_ACTIVE_STATUSES))
-                .where(Order.assigned_master_telegram_id.isnot(None))
                 .group_by(Order.assigned_master_telegram_id)
             )
-            counts_res = await session.execute(active_counts_query)
             master_workload = dict(counts_res.all())
     except Exception as exc:
         await callback.answer(str(exc), show_alert=True)
         return
 
     if not masters:
-        await callback.answer(
-            "Tizimda birorta ham Master yo'q. MASTER_IDS sozlang yoki /register_master orqali qo'shing.",
-            show_alert=True,
-        )
+        await callback.answer("Tizimda birorta ham Master yo'q.", show_alert=True)
         return
 
     keyboard = []
@@ -222,372 +144,210 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
         name = m.full_name or f"ID:{m.telegram_id}"
         active_jobs = master_workload.get(m.telegram_id, 0)
         badge = "🟢" if active_jobs == 0 else f"🟡{active_jobs}"
-        keyboard.append([
-            InlineKeyboardButton(
-                text=f"👨‍🔧 {name} ({badge})",
-                callback_data=f"select_master:{order_id}:{m.telegram_id}",
-            )
-        ])
+        keyboard.append([InlineKeyboardButton(text=f"👨‍🔧 {name} ({badge})", callback_data=f"select_master:{order_id}:{m.telegram_id}")])
 
     try:
-        await msg.edit_text(
-            f"Buyurtma #{order_id} ga biriktirish uchun Masterlardan birini tanlang:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
-        )
-    except TelegramBadRequest:
-        pass
+        await msg.edit_text(f"Buyurtma #{order_id} ga Master tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    except TelegramBadRequest: pass
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("select_master:"))
 async def cb_select_master(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_callback(callback):
+    if not is_dispatcher(callback.from_user.id if callback.from_user else None, callback.message.chat.id if callback.message else None):
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    if not callback.data:
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
-        return
     try:
         parts = callback.data.split(":")
-        order_id = int(parts[1])
-        master_telegram_id = int(parts[2])
-    except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri master tanlovi.", show_alert=True)
-        return
-    dispatcher_telegram_id = callback.from_user.id
-
-    try:
+        order_id, master_telegram_id = int(parts[1]), int(parts[2])
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
-
             master_user = await session.scalar(select(User).where(User.telegram_id == master_telegram_id))
             master_name = master_user.full_name if master_user and master_user.full_name else str(master_telegram_id)
-
-            # 1. Assign to dispatcher first (like before)
-            order = await service.assign_order(order_id, dispatcher_telegram_id=dispatcher_telegram_id)
-            # 2. Then assign master
-            order = await service.assign_master(
-                order_id=order.id,
-                dispatcher_telegram_id=dispatcher_telegram_id,
-                master_telegram_id=master_telegram_id,
-            )
+            
+            order = await service.assign_order(order_id, dispatcher_telegram_id=callback.from_user.id)
+            order = await service.assign_master(order_id=order.id, dispatcher_telegram_id=callback.from_user.id, master_telegram_id=master_telegram_id)
+            
             ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
             await ns.notify_master_new_assignment(order, master_telegram_id)
     except Exception as exc:
-        logger.exception("Failed to assign master for order #%s: %s", order_id, exc)
+        logger.exception("Failed to assign master: %s", exc)
         await callback.answer(str(exc)[:200], show_alert=True)
         return
 
     msg = _safe_message(callback)
-    if msg is not None:
-        try:
-            await msg.edit_text(f"✅ Buyurtma #{order.id} 👨‍🔧 {master_name} ga muvaffaqiyatli biriktirildi.")
-        except TelegramBadRequest:
-            pass
+    if msg:
+        try: await msg.edit_text(f"✅ Buyurtma #{order_id} 👨‍🔧 {master_name} ga biriktirildi.")
+        except TelegramBadRequest: pass
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dispatch_complete:"))
 async def cb_complete_order(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_callback(callback):
+    if not is_dispatcher(callback.from_user.id if callback.from_user else None, callback.message.chat.id if callback.message else None):
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    if not callback.data:
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
-        return
     try:
         order_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
-        return
-    dispatcher_telegram_id = callback.from_user.id
-
-    try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
             order = await service.get_order(order_id)
-
-            # In group chats any dispatcher can confirm; use the original assigner
-            actual_dispatcher = order.assigned_dispatcher_telegram_id or dispatcher_telegram_id
-
-            order = await service.dispatcher_transition(
-                order_id=order_id,
-                dispatcher_telegram_id=actual_dispatcher,
-                to_status=OrderStatus.COMPLETED,
-            )
+            actual_dispatcher = order.assigned_dispatcher_telegram_id or callback.from_user.id
+            order = await service.dispatcher_transition(order_id=order_id, dispatcher_telegram_id=actual_dispatcher, to_status=OrderStatus.COMPLETED)
             ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
     except Exception as exc:
-        logger.exception("Failed to complete order #%s: %s", order_id, exc)
-        await callback.answer(f"Xatolik: {exc}"[:200], show_alert=True)
+        await callback.answer(f"Xatolik: {exc}", show_alert=True)
         return
 
-    amount_text = f"{order.final_amount:,.0f}" if order.final_amount else "—"
     msg = _safe_message(callback)
-    if msg is not None:
-        try:
-            await msg.edit_text(
-                f"✅ Buyurtma #{order.id} muvaffaqiyatli tasdiqlandi.\nSumma: {amount_text} so'm"
-            )
-        except TelegramBadRequest:
-            pass
+    if msg:
+        try: await msg.edit_text(f"✅ Buyurtma #{order_id} muvaffaqiyatli tasdiqlandi.")
+        except TelegramBadRequest: pass
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dispatch_cancel:"))
 async def cb_cancel_order(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_callback(callback):
+    if not is_dispatcher(callback.from_user.id if callback.from_user else None, callback.message.chat.id if callback.message else None):
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    if not callback.data:
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
-        return
     try:
         order_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
-        return
-
-    try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
             order = await service.dispatcher_cancel_order(order_id)
             ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
     except Exception as exc:
-        logger.exception("Failed to cancel order #%s: %s", order_id, exc)
-        await callback.answer(f"Xatolik: {exc}"[:200], show_alert=True)
+        await callback.answer(f"Xatolik: {exc}", show_alert=True)
         return
 
     msg = _safe_message(callback)
-    if msg is not None:
-        try:
-            await msg.edit_text(f"🚫 Buyurtma #{order.id} bekor qilindi.")
-        except TelegramBadRequest:
-            pass
+    if msg:
+        try: await msg.edit_text(f"🚫 Buyurtma #{order_id} bekor qilindi.")
+        except TelegramBadRequest: pass
     await callback.answer()
 
 
 @router.message(Command("dashboard"))
 async def cmd_dashboard(message: Message) -> None:
-    if not _is_dispatcher_message(message):
+    if not is_dispatcher(message.from_user.id if message.from_user else None, message.chat.id):
         return
 
     async with AsyncSessionFactory() as session:
         query = select(Order.status, func.count(Order.id)).group_by(Order.status)
         result = await session.execute(query)
-        status_counts = dict(result.all())
-
-    new = status_counts.get(OrderStatus.NEW, 0)
-    rejected = status_counts.get(OrderStatus.REJECTED, 0)
-    assigned = status_counts.get(OrderStatus.ASSIGNED, 0)
-    accepted = status_counts.get(OrderStatus.ACCEPTED, 0)
-    on_way = status_counts.get(OrderStatus.ON_THE_WAY, 0)
-    arrived = status_counts.get(OrderStatus.ARRIVED, 0)
-    in_prog = status_counts.get(OrderStatus.IN_PROGRESS, 0)
-    awaiting = status_counts.get(OrderStatus.AWAITING_CONFIRM, 0)
-    completed = status_counts.get(OrderStatus.COMPLETED, 0)
+        s = dict(result.all())
 
     text = (
-        "📊 Dispecher Jonli Statistikasi\n\n"
-        f"🔴 Kutilayotgan (NEW): {new} ta\n"
-        f"🟠 Rad etilgan (REJECTED): {rejected} ta\n"
-        f"🔵 Biriktirilgan (ASSIGNED): {assigned} ta\n"
-        f"✅ Qabul qilingan (ACCEPTED): {accepted} ta\n"
-        f"🟡 Yo'lda (ON WAY): {on_way} ta\n"
-        f"📍 Manzilda (ARRIVED): {arrived} ta\n"
-        f"🛠 Ta'mirlanmoqda (IN PROGRESS): {in_prog} ta\n"
-        f"⏳ Tasdiq kutmoqda: {awaiting} ta\n"
-        f"🏁 Yakunlangan (COMPLETED): {completed} ta\n\n"
-        "Buyruqlar:\n"
-        "/new_orders — Yangi buyurtmalar\n"
-        "/active_orders — Faol buyurtmalar\n"
-        "/order <id> — Buyurtma tafsilotlari"
+        "📊 Jonli Statistika\n\n"
+        f"🔴 Kutilayotgan: {s.get(OrderStatus.NEW, 0)} ta\n"
+        f"🟠 Rad etilgan: {s.get(OrderStatus.REJECTED, 0)} ta\n"
+        f"🔵 Biriktirilgan: {s.get(OrderStatus.ASSIGNED, 0)} ta\n"
+        f"✅ Qabul qilingan: {s.get(OrderStatus.ACCEPTED, 0)} ta\n"
+        f"🟡 Yo'lda: {s.get(OrderStatus.ON_THE_WAY, 0)} ta\n"
+        f"⏳ Tasdiq kutmoqda: {s.get(OrderStatus.AWAITING_CONFIRM, 0)} ta\n"
+        f"🏁 Yakunlangan: {s.get(OrderStatus.COMPLETED, 0)} ta\n\n"
+        "Buyruqlar: /new_orders, /active_orders, /order <id>"
     )
     await message.answer(text)
 
 
 @router.message(Command("order"))
 async def cmd_order_detail(message: Message) -> None:
-    if not _is_dispatcher_message(message):
+    if not is_dispatcher(message.from_user.id if message.from_user else None, message.chat.id):
         return
 
     parts = (message.text or "").split()
     if len(parts) < 2:
-        await message.answer("Format: /order <buyurtma_id>\nMasalan: /order 5")
+        await message.answer("Format: /order <id>")
         return
 
     try:
         order_id = int(parts[1])
-    except ValueError:
-        await message.answer("Buyurtma ID raqam bo'lishi kerak.")
-        return
-
-    try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
             order = await service.get_order(order_id)
+            master_name = "—"
+            if order.assigned_master_telegram_id:
+                master_user = await session.scalar(select(User).where(User.telegram_id == order.assigned_master_telegram_id))
+                if master_user: master_name = master_user.full_name or str(master_user.telegram_id)
     except Exception as exc:
         await message.answer(f"Xatolik: {exc}")
         return
-
-    master_name = "—"
-    if order.assigned_master_telegram_id:
-        async with AsyncSessionFactory() as session:
-            master_user = await session.scalar(
-                select(User).where(User.telegram_id == order.assigned_master_telegram_id)
-            )
-            if master_user:
-                master_name = master_user.full_name or str(master_user.telegram_id)
-
-    amount_text = f"{order.final_amount:,.0f} so'm" if order.final_amount else "—"
-    rating_text = f"{'⭐' * order.rating}" if order.rating else "—"
 
     text = (
         f"📋 Buyurtma #{order.id}\n\n"
         f"Status: {order.status.name}\n"
         f"Muammo: {order.issue_label}\n"
         f"Telefon: {order.phone}\n"
-        f"Lokatsiya: https://maps.google.com/?q={order.latitude},{order.longitude}\n"
         f"Master: {master_name}\n"
-        f"Summa: {amount_text}\n"
-        f"Baho: {rating_text}\n"
-        f"Yaratilgan: {order.created_at}\n"
+        f"Summa: {float(order.final_amount or 0):,.0f} so'm\n"
     )
 
-    # Build action buttons based on current status
     buttons = []
     if order.status in (OrderStatus.NEW, OrderStatus.REJECTED):
-        buttons.append([InlineKeyboardButton(
-            text="📝 Master biriktirish",
-            callback_data=f"dispatch_assign:{order.id}",
-        )])
+        buttons.append([InlineKeyboardButton(text="📝 Master biriktirish", callback_data=f"dispatch_assign:{order.id}")])
     if order.status == OrderStatus.AWAITING_CONFIRM:
-        buttons.append([InlineKeyboardButton(
-            text="💰 Tasdiqlash",
-            callback_data=f"dispatch_complete:{order.id}",
-        )])
+        buttons.append([InlineKeyboardButton(text="💰 Tasdiqlash", callback_data=f"dispatch_complete:{order.id}")])
     if order.status not in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
-        buttons.append([InlineKeyboardButton(
-            text="🚫 Bekor qilish",
-            callback_data=f"dispatch_cancel:{order.id}",
-        )])
+        buttons.append([InlineKeyboardButton(text="🚫 Bekor qilish", callback_data=f"dispatch_cancel:{order.id}")])
 
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None)
 
 
 @router.message(Command("active_orders"))
 async def cmd_active_orders(message: Message) -> None:
-    if not _is_dispatcher_message(message):
+    if not is_dispatcher(message.from_user.id if message.from_user else None, message.chat.id):
         return
 
     async with AsyncSessionFactory() as session:
         service = OrderService(session)
-        orders = await service.list_orders_by_status(
-            [
-                OrderStatus.ASSIGNED,
-                OrderStatus.ACCEPTED,
-                OrderStatus.ON_THE_WAY,
-                OrderStatus.ARRIVED,
-                OrderStatus.IN_PROGRESS,
-                OrderStatus.AWAITING_CONFIRM,
-            ],
-            limit=20,
-        )
+        orders = await service.list_orders_by_status([OrderStatus.ASSIGNED, OrderStatus.ACCEPTED, OrderStatus.ON_THE_WAY, OrderStatus.ARRIVED, OrderStatus.IN_PROGRESS, OrderStatus.AWAITING_CONFIRM], limit=20)
 
     if not orders:
-        await message.answer("Hozir faol buyurtmalar yo'q.")
+        await message.answer("Faol buyurtmalar yo'q.")
         return
 
-    await message.answer(f"Faol buyurtmalar: {len(orders)} ta")
-    for order in orders:
-        text = (
-            f"#{order.id} | {order.status.name} | {order.issue_label} | {order.phone}"
-        )
-        buttons = []
-        if order.status == OrderStatus.AWAITING_CONFIRM:
-            buttons.append([InlineKeyboardButton(
-                text="💰 Tasdiqlash",
-                callback_data=f"dispatch_complete:{order.id}",
-            )])
-        if order.status not in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
-            buttons.append([InlineKeyboardButton(
-                text="📋 Tafsilot",
-                callback_data=f"dispatch_detail:{order.id}",
-            )])
-        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-        await message.answer(text, reply_markup=kb)
+    for o in orders:
+        buttons = [[InlineKeyboardButton(text="📋 Tafsilot", callback_data=f"dispatch_detail:{o.id}")]]
+        if o.status == OrderStatus.AWAITING_CONFIRM:
+            buttons.insert(0, [InlineKeyboardButton(text="💰 Tasdiqlash", callback_data=f"dispatch_complete:{o.id}")])
+        await message.answer(f"#{o.id} | {o.status.name} | {o.issue_label} | {o.phone}", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
 @router.callback_query(F.data.startswith("dispatch_detail:"))
 async def cb_order_detail_inline(callback: CallbackQuery) -> None:
-    if not _is_dispatcher_callback(callback):
+    if not is_dispatcher(callback.from_user.id if callback.from_user else None, callback.message.chat.id if callback.message else None):
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    if not callback.data:
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
-        return
     try:
         order_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
-        return
-
-    try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
             order = await service.get_order(order_id)
+            master_name = "—"
+            if order.assigned_master_telegram_id:
+                master_user = await session.scalar(select(User).where(User.telegram_id == order.assigned_master_telegram_id))
+                if master_user: master_name = master_user.full_name or str(master_user.telegram_id)
     except Exception as exc:
         await callback.answer(str(exc)[:200], show_alert=True)
         return
 
-    master_name = "—"
-    if order.assigned_master_telegram_id:
-        async with AsyncSessionFactory() as session:
-            master_user = await session.scalar(
-                select(User).where(User.telegram_id == order.assigned_master_telegram_id)
-            )
-            if master_user:
-                master_name = master_user.full_name or str(master_user.telegram_id)
-
-    amount_text = f"{order.final_amount:,.0f} so'm" if order.final_amount else "—"
-
-    text = (
-        f"📋 Buyurtma #{order.id}\n"
-        f"Status: {order.status.name}\n"
-        f"Muammo: {order.issue_label}\n"
-        f"Telefon: {order.phone}\n"
-        f"Master: {master_name}\n"
-        f"Summa: {amount_text}\n"
-    )
-
+    text = f"📋 Buyurtma #{order.id}\nStatus: {order.status.name}\nMuammo: {order.issue_label}\nMaster: {master_name}"
     buttons = []
-    if order.status in (OrderStatus.NEW, OrderStatus.REJECTED):
-        buttons.append([InlineKeyboardButton(
-            text="📝 Master biriktirish",
-            callback_data=f"dispatch_assign:{order_id}",
-        )])
     if order.status == OrderStatus.AWAITING_CONFIRM:
-        buttons.append([InlineKeyboardButton(
-            text="💰 Tasdiqlash",
-            callback_data=f"dispatch_complete:{order_id}",
-        )])
-    if order.status not in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
-        buttons.append([InlineKeyboardButton(
-            text="🚫 Bekor qilish",
-            callback_data=f"dispatch_cancel:{order_id}",
-        )])
+        buttons.append([InlineKeyboardButton(text="💰 Tasdiqlash", callback_data=f"dispatch_complete:{order_id}")])
+    buttons.append([InlineKeyboardButton(text="🚫 Bekor qilish", callback_data=f"dispatch_cancel:{order_id}")])
 
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
     msg = _safe_message(callback)
-    if msg is not None:
-        try:
-            await msg.edit_text(text, reply_markup=kb)
-        except TelegramBadRequest:
-            pass
+    if msg:
+        try: await msg.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        except TelegramBadRequest: pass
     await callback.answer()

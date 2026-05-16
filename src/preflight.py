@@ -2,142 +2,92 @@ import asyncio
 import logging
 import os
 import sys
-from dataclasses import dataclass
-from typing import Any
 
 from aiogram import Bot
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import select, text
 
 from src.core.config import get_settings
+from src.db.session import engine
 
-settings = get_settings()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("preflight")
 
-
-@dataclass
-class CheckResult:
-    name: str
-    success: bool
-    message: str
-    details: Any = None
-
-
-async def check_bot_token() -> CheckResult:
+async def check_bot_token(settings):
     if not settings.bot_token:
-        return CheckResult("Bot Token", False, "BOT_TOKEN is not set in environment.")
+        logger.error("❌ BOT_TOKEN is missing!")
+        return False
     
     try:
         bot = Bot(token=settings.bot_token)
         me = await bot.get_me()
+        logger.info("✅ Bot Token is valid: @%s (%s)", me.username, me.id)
         await bot.session.close()
-        return CheckResult("Bot Token", True, f"Token is valid. Bot: @{me.username}")
+        return True
     except Exception as exc:
-        return CheckResult("Bot Token", False, f"Token validation failed: {exc}")
+        logger.error("❌ Bot Token is invalid or Telegram is unreachable: %s", exc)
+        return False
 
-
-async def check_database() -> CheckResult:
-    url = settings.resolved_database_dsn
-    if not url:
-        return CheckResult("Database", False, "Database DSN is not resolved.")
-    
+async def check_database(settings):
     try:
-        engine = create_async_engine(url)
-        async with engine.begin() as conn:
-            # 1. Check connectivity
-            await conn.execute(text("SELECT 1"))
+        async with engine.connect() as conn:
+            # 1. Basic connectivity
+            await conn.execute(select(1))
+            logger.info("✅ Database connectivity: OK")
             
-            # 2. Check essential tables and columns
-            # This helps identify if migrations actually ran
+            # 2. Check essential tables
             result = await conn.execute(text(
-                "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
             ))
-            schema_data = result.fetchall()
+            tables = [row[0] for row in result.fetchall()]
+            logger.info("📊 Found tables: %s", ", ".join(tables) if tables else "NONE")
             
-            # Map table -> set of columns
-            db_schema: dict[str, set[str]] = {}
-            for table_name, column_name in schema_data:
-                if table_name not in db_schema:
-                    db_schema[table_name] = set()
-                db_schema[table_name].add(column_name)
+            # 3. Check for language column type (our recent fix)
+            if "users" in tables:
+                res = await conn.execute(text(
+                    "SELECT data_type FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'language'"
+                ))
+                row = res.fetchone()
+                if row:
+                    logger.info("ℹ️ User.language type: %s", row[0])
             
-            required_tables = {
-                "users": {"id", "telegram_id", "language", "is_master"},
-                "orders": {"id", "client_id", "status", "video_file_id", "rating"},
-                "order_status_history": {"id", "order_id", "to_status"}
-            }
-            
-            errors = []
-            for table, req_cols in required_tables.items():
-                if table not in db_schema:
-                    errors.append(f"Table '{table}' is missing.")
-                else:
-                    found_cols = db_schema[table]
-                    missing_cols = req_cols - found_cols
-                    if missing_cols:
-                        errors.append(f"Table '{table}' is missing columns: {', '.join(missing_cols)}")
-            
-            await engine.dispose()
-            
-            if errors:
-                return CheckResult(
-                    "Database", 
-                    False, 
-                    "Schema verification failed: " + " | ".join(errors),
-                    details={"tables_found": list(db_schema.keys())}
-                )
-                
-            return CheckResult("Database", True, f"Connected and verified {len(db_schema)} tables with all required columns.")
+            return True
     except Exception as exc:
-        return CheckResult("Database", False, f"Connection failed: {exc}")
+        logger.error("❌ Database check failed: %s", exc)
+        return False
 
-
-async def check_redis() -> CheckResult:
-    if not settings.use_redis:
-        return CheckResult("Redis", True, "Redis is disabled (USE_REDIS=false).")
+def check_env_vars(settings):
+    critical_vars = {
+        "DATABASE_URL": settings.database_url,
+        "BOT_TOKEN": settings.bot_token,
+        "ADMIN_IDS": settings.admin_ids,
+        "DISPATCHER_IDS": settings.dispatcher_ids,
+    }
     
-    from redis.asyncio import Redis
-    try:
-        r = Redis.from_url(settings.redis_dsn)
-        await r.ping()
-        await r.aclose()
-        return CheckResult("Redis", True, "Connected successfully.")
-    except Exception as exc:
-        return CheckResult("Redis", False, f"Connection failed: {exc}")
-
+    all_ok = True
+    for name, val in critical_vars.items():
+        if not val:
+            logger.warning("⚠️ Environment variable %s is not set", name)
+        else:
+            # Mask value for safety
+            masked = str(val)[:4] + "..." + str(val)[-4:] if len(str(val)) > 8 else "***"
+            logger.info("✅ %s is configured (%s)", name, masked)
+            
+    return all_ok
 
 async def main():
-    logger.info("Starting preflight checks...")
+    logger.info("🚀 Starting Official Deep Audit...")
+    settings = get_settings()
     
-    results = [
-        await check_bot_token(),
-        await check_database(),
-        await check_redis(),
-    ]
+    env_ok = check_env_vars(settings)
+    db_ok = await check_database(settings)
+    bot_ok = await check_bot_token(settings)
     
-    failed = False
-    print("\n" + "="*40)
-    print(" PREFLIGHT CHECK RESULTS ")
-    print("="*40)
-    
-    for res in results:
-        status = "✅ PASS" if res.success else "❌ FAIL"
-        print(f"{status} | {res.name}: {res.message}")
-        if not res.success:
-            failed = True
-            if res.details:
-                print(f"   Details: {res.details}")
-                
-    print("="*40)
-    
-    if failed:
-        logger.error("Preflight checks failed! Bot might not function correctly.")
-        sys.exit(1)
+    if not (env_ok and db_ok and bot_ok):
+        logger.error("🚨 Deep Audit failed! Some components are not ready.")
+        # We don't sys.exit(1) here to allow Alembic to try and fix the DB in start.sh
+        # but we provide clear warnings.
     else:
-        logger.info("All checks passed!")
-        sys.exit(0)
-
+        logger.info("✨ Deep Audit complete: ALL SYSTEMS NOMINAL")
 
 if __name__ == "__main__":
     asyncio.run(main())

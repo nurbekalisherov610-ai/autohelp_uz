@@ -3,10 +3,8 @@ import logging
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InaccessibleMessage, Message
+from aiogram.types import CallbackQuery, InaccessibleMessage, Message, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
-
-logger = logging.getLogger(__name__)
 
 from src.bot.keyboards.driver import (
     BUTTONS,
@@ -30,138 +28,55 @@ from src.db.session import AsyncSessionFactory
 from src.services.notification_service import NotificationService
 from src.services.order_service import DriverOrderPayload, OrderService
 
+logger = logging.getLogger(__name__)
 router = Router(name="driver_quick_order")
 settings = get_settings()
 
 
 def _safe_message(callback: CallbackQuery) -> Message | None:
-    """Return the real Message object or None if the message is inaccessible."""
     msg = callback.message
     if msg is None or isinstance(msg, InaccessibleMessage):
         return None
     return msg
 
-TEXT: dict[str, dict[str, str]] = {
-    "choose_language": {
-        "uz": "Tilni tanlang / Выберите язык:",
-        "ru": "Tilni tanlang / Выберите язык:",
-    },
-    "welcome": {
-        "uz": "AutoHelp.uz ga xush kelibsiz. Tez yordam uchun tugmani bosing.",
-        "ru": "Добро пожаловать в AutoHelp.uz. Нажмите кнопку, чтобы вызвать помощь.",
-    },
-    "cancelled": {
-        "uz": "Jarayon bekor qilindi.",
-        "ru": "Процесс отменен.",
-    },
-    "main_menu": {
-        "uz": "Asosiy menyu",
-        "ru": "Главное меню",
-    },
-    "ask_issue": {
-        "uz": "Nima muammo?",
-        "ru": "Что случилось?",
-    },
-    "invalid_issue": {
-        "uz": "Iltimos, ro'yxatdan muammo turini tanlang.",
-        "ru": "Пожалуйста, выберите проблему из списка.",
-    },
-    "ask_phone": {
-        "uz": "Telefon raqamingizni yuboring.",
-        "ru": "Отправьте ваш номер телефона.",
-    },
-    "ask_own_phone": {
-        "uz": "Iltimos, o'zingizning raqamingizni yuboring.",
-        "ru": "Пожалуйста, отправьте свой номер телефона.",
-    },
-    "phone_missing": {
-        "uz": "Telefon yuborilmadi. Qaytadan urinib ko'ring.",
-        "ru": "Номер не получен. Попробуйте еще раз.",
-    },
-    "phone_hint": {
-        "uz": "Iltimos, `{button}` tugmasi orqali yuboring.",
-        "ru": "Пожалуйста, отправьте через кнопку `{button}`.",
-    },
-    "ask_location": {
-        "uz": "Lokatsiyani yuboring.",
-        "ru": "Отправьте вашу локацию.",
-    },
-    "location_missing": {
-        "uz": "Lokatsiya yuborilmadi. Qaytadan urinib ko'ring.",
-        "ru": "Локация не получена. Попробуйте еще раз.",
-    },
-    "location_hint": {
-        "uz": "Iltimos, `{button}` tugmasi orqali yuboring.",
-        "ru": "Пожалуйста, отправьте через кнопку `{button}`.",
-    },
-    "confirm_summary": {
-        "uz": "Buyurtma tasdiqlansinmi?\n\nMuammo: {issue}\nTelefon: {phone}\nLokatsiya: {maps}",
-        "ru": "Подтвердить заявку?\n\nПроблема: {issue}\nТелефон: {phone}\nЛокация: {maps}",
-    },
-    "order_cancelled": {
-        "uz": "Buyurtma bekor qilindi.",
-        "ru": "Заявка отменена.",
-    },
-    "user_missing": {
-        "uz": "Foydalanuvchi aniqlanmadi.",
-        "ru": "Пользователь не найден.",
-    },
-    "order_created": {
-        "uz": "Buyurtmangiz qabul qilindi. ID: #{order_id}. Dispecher tez orada siz bilan bog'lanadi.",
-        "ru": "Ваша заявка принята. ID: #{order_id}. Диспетчер скоро свяжется с вами.",
-    },
+TEXT = {
+    "choose_language": {"uz": "Tilni tanlang / Выберите язык:", "ru": "Tilni tanlang / Выберите язык:"},
+    "welcome": {"uz": "AutoHelp.uz ga xush kelibsiz. Tez yordam uchun quyidagi tugmalardan birini tanlang.", "ru": "Добро пожаловать в AutoHelp.uz. Выберите одну из кнопок ниже."},
+    "cancelled": {"uz": "Jarayon bekor qilindi.", "ru": "Процесс отменен."},
+    "main_menu": {"uz": "Asosiy menyu", "ru": "Главное меню"},
+    "ask_issue": {"uz": "Nima muammo yuz berdi?", "ru": "Что случилось?"},
+    "invalid_issue": {"uz": "Iltimos, ro'yxatdan muammo turini tanlang.", "ru": "Пожалуйста, выберите проблему из списка."},
+    "ask_phone": {"uz": "Telefon raqamingizni yuboring (pastdagi tugmani bosing).", "ru": "Отправьте ваш номер телефона (нажмите кнопку ниже)."},
+    "ask_own_phone": {"uz": "Iltimos, faqat o'zingizning raqamingizni yuboring.", "ru": "Пожалуйста, отправьте свой номер телефона."},
+    "phone_missing": {"uz": "Telefon raqami olinmadi.", "ru": "Номер не получен."},
+    "phone_hint": {"uz": "Iltimos, '{button}' tugmasi orqali yuboring.", "ru": "Пожалуйста, используйте кнопку '{button}'."},
+    "ask_location": {"uz": "Hozirgi turgan lokatsiyangizni yuboring.", "ru": "Отправьте вашу текущую локацию."},
+    "location_missing": {"uz": "Lokatsiya olinmadi.", "ru": "Локация не получена."},
+    "location_hint": {"uz": "Iltimos, '{button}' tugmasi orqali yuboring.", "ru": "Пожалуйста, используйте кнопку '{button}'."},
+    "confirm_summary": {"uz": "Buyurtma ma'lumotlari:\n\n🛠 Muammo: {issue}\n📞 Tel: {phone}\n📍 Lokatsiya: [Xaritada ko'rish]({maps})", "ru": "Данные заявки:\n\n🛠 Проблема: {issue}\n📞 Тел: {phone}\n📍 Локация: [Посмотреть на карте]({maps})"},
+    "order_cancelled": {"uz": "Buyurtma bekor qilindi.", "ru": "Заявка отменена."},
+    "user_missing": {"uz": "Foydalanuvchi aniqlanmadi.", "ru": "Пользователь не найден."},
+    "order_created": {"uz": "✅ Buyurtmangiz qabul qilindi. ID: #{order_id}\nDispecher tez orada siz bilan bog'lanadi.", "ru": "✅ Ваша заявка принята. ID: #{order_id}\nДиспетчер скоро свяжется с вами."},
     "about_text": {
-        "uz": (
-            "🚀 **AutoHelp.uz** — Yo'ldagi tezkor yordam xizmati.\n\n"
-            "Biz sizga quyidagi holatlarda yordam beramiz:\n"
-            "• Avtomobil zavod bo'lmaganda\n"
-            "• Akkumulyator quvvati tugaganda\n"
-            "• Balon almashtirish kerak bo'lganda\n"
-            "• Va boshqa texnik nosozliklarda\n\n"
-            "📞 Aloqa: +998 (XX) XXX-XX-XX\n"
-            "📍 Hudud: Toshkent shahri va viloyati"
-        ),
-        "ru": (
-            "🚀 **AutoHelp.uz** — Служба быстрой помощи на дорогах.\n\n"
-            "Мы поможем вам в следующих случаях:\n"
-            "• Автомобиль не заводится\n"
-            "• Сел аккумулятор\n"
-            "• Нужно заменить колесо\n"
-            "• И другие технические проблемы\n\n"
-            "📞 Контакты: +998 (XX) XXX-XX-XX\n"
-            "📍 Регион: Ташкент и область"
-        ),
+        "uz": "🚀 **AutoHelp.uz** — Yo'ldagi tezkor yordam xizmati.\n\nBizning xizmatlar:\n• Avtomobil zavod bo'lmaganda yordam\n• Akkumulyator quvvati (perekurka)\n• Balon almashtirish\n• Texnik diagnostika",
+        "ru": "🚀 **AutoHelp.uz** — Служба быстрой помощи на дорогах.\n\nНаши услуги:\n• Помощь, если машина не заводится\n• Зарядка аккумулятора (прикуривание)\n• Замена колеса\n• Техническая диагностика"
     },
-    "no_active_orders": {
-        "uz": "Sizda hozircha faol buyurtmalar yo'q.",
-        "ru": "У вас пока нет активных заказов.",
-    },
-    "order_status_text": {
-        "uz": "Buyurtma #{id}\nHolati: {status}\nMuammo: {issue}\nYaratilgan: {date}",
-        "ru": "Заказ #{id}\nСтатус: {status}\nПроблема: {issue}\nСоздан: {date}",
-    },
+    "no_active_orders": {"uz": "Sizda hozircha faol buyurtmalar yo'q.", "ru": "У вас пока нет активных заказов."},
+    "order_item": {"uz": "#{id} | {status} | {issue} | {date}", "ru": "#{id} | {status} | {issue} | {date}"},
 }
 
+def _t(language: str | None, key: str, **kwargs) -> str:
+    return TEXT[key][normalize_language(language)].format(**kwargs)
 
-def _t(language: str | None, key: str, **kwargs: object) -> str:
-    lang = normalize_language(language)
-    return TEXT[key][lang].format(**kwargs)
-
-
-async def _get_saved_language(telegram_id: int | None) -> str:
-    if telegram_id is None:
-        return "uz"
+async def _get_user_language(user_id: int) -> str:
     async with AsyncSessionFactory() as session:
-        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+        user = await session.scalar(select(User).where(User.telegram_id == user_id))
         return normalize_language(user.language if user else None)
 
-
-async def _state_language(state: FSMContext, user_id: int | None = None) -> str:
+async def _get_current_language(state: FSMContext, user_id: int) -> str:
     data = await state.get_data()
-    if data.get("language"):
-        return normalize_language(str(data["language"]))
-    return await _get_saved_language(user_id)
-
+    if "language" in data: return normalize_language(data["language"])
+    return await _get_user_language(user_id)
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
@@ -169,66 +84,34 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.set_state(DriverQuickOrderState.language)
     await message.answer(TEXT["choose_language"]["uz"], reply_markup=language_keyboard())
 
-
 @router.callback_query(DriverQuickOrderState.language, F.data.startswith("language:"))
+@router.callback_query(F.data.startswith("language:")) # Allow global language change
 async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
-    if not callback.data:
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
-        return
-
-    try:
-        language = normalize_language(callback.data.split(":", 1)[1])
-    except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri til tanlandi.", show_alert=True)
-        return
-
-    try:
-        # 1. Database work FIRST.
-        if callback.from_user is not None:
-            async with AsyncSessionFactory() as session:
-                user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
-                if user is None:
-                    user = User(
-                        telegram_id=callback.from_user.id,
-                        full_name=callback.from_user.full_name,
-                        language=language,
-                    )
-                    session.add(user)
-                else:
-                    user.language = language
-                    if callback.from_user.full_name:
-                        user.full_name = callback.from_user.full_name
-                await session.commit()
-
-        # 2. State work
-        await state.clear()
-        await state.update_data(language=language)
-
-        # 3. UI work
-        msg = _safe_message(callback)
-        if msg is not None:
-            try:
-                await msg.edit_text(_t(language, "welcome"))
-            except Exception:
-                pass
-            await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
-
-    except Exception as exc:
-        logger.exception("CRITICAL: choose_language DB error: %s", exc)
-        await callback.answer("Texnik xatolik yuz berdi.", show_alert=True)
-        return
-
-    await callback.answer()
-
-
-@router.message(Command("cancel"))
-@router.message(F.text.in_(CANCEL_BUTTONS))
-async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
+    language = normalize_language(callback.data.split(":")[1])
+    async with AsyncSessionFactory() as session:
+        user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+        if not user:
+            user = User(telegram_id=callback.from_user.id, full_name=callback.from_user.full_name, language=language)
+            session.add(user)
+        else:
+            user.language = language
+        await session.commit()
+    
     await state.clear()
     await state.update_data(language=language)
-    await message.answer(_t(language, "cancelled"), reply_markup=start_keyboard(language))
+    msg = _safe_message(callback)
+    if msg:
+        try: await msg.edit_text(_t(language, "welcome"))
+        except: pass
+        await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+    await callback.answer()
 
+@router.message(F.text.in_(CANCEL_BUTTONS) | Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    lang = await _get_current_language(state, message.from_user.id)
+    await state.clear()
+    await state.update_data(language=lang)
+    await message.answer(_t(lang, "cancelled"), reply_markup=start_keyboard(lang))
 
 @router.message(F.text.in_(set(BUTTONS["change_lang"].values())))
 async def cmd_change_lang(message: Message, state: FSMContext) -> None:
@@ -236,232 +119,117 @@ async def cmd_change_lang(message: Message, state: FSMContext) -> None:
     await state.set_state(DriverQuickOrderState.language)
     await message.answer(TEXT["choose_language"]["uz"], reply_markup=language_keyboard())
 
-
 @router.message(F.text.in_(set(BUTTONS["about"].values())))
 async def cmd_about(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
-    await message.answer(_t(language, "about_text"), parse_mode="Markdown")
-
+    lang = await _get_current_language(state, message.from_user.id)
+    await message.answer(_t(lang, "about_text"), parse_mode="Markdown")
 
 @router.message(F.text.in_(set(BUTTONS["order_status"].values())))
 async def cmd_order_status(message: Message, state: FSMContext) -> None:
-    if message.from_user is None:
-        return
-    language = await _state_language(state, message.from_user.id)
-    
+    lang = await _get_current_language(state, message.from_user.id)
     async with AsyncSessionFactory() as session:
-        # Find latest active order for this user
-        query = (
-            select(Order)
-            .join(User)
-            .where(User.telegram_id == message.from_user.id)
-            .order_by(Order.created_at.desc())
-            .limit(1)
-        )
-        res = await session.execute(query)
-        order = res.scalar_one_or_none()
-        
-    if not order:
-        await message.answer(_t(language, "no_active_orders"))
+        query = select(Order).join(User).where(User.telegram_id == message.from_user.id).order_by(Order.created_at.desc()).limit(5)
+        orders = (await session.execute(query)).scalars().all()
+    
+    if not orders:
+        await message.answer(_t(lang, "no_active_orders"))
         return
-        
-    await message.answer(
-        _t(
-            language, 
-            "order_status_text",
-            id=order.id,
-            status=order.status.name,
-            issue=order.issue_label,
-            date=order.created_at.strftime("%Y-%m-%d %H:%M"),
-        )
-    )
+    
+    lines = ["📋 So'nggi buyurtmalar / Последние заказы:\n"]
+    for o in orders:
+        lines.append(_t(lang, "order_item", id=o.id, status=o.status.name, issue=o.issue_label, date=o.created_at.strftime("%H:%M %d.%m")))
+    await message.answer("\n".join(lines))
 
-
-@router.message(Command("new_order"))
-@router.message(F.text.in_(set(BUTTONS["start_order"].values()) | {START_ORDER_BUTTON}))
+@router.message(F.text.in_(set(BUTTONS["start_order"].values()) | {START_ORDER_BUTTON}) | Command("new_order"))
 async def start_quick_order(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
+    lang = await _get_current_language(state, message.from_user.id)
     await state.clear()
-    await state.update_data(language=language)
+    await state.update_data(language=lang)
     await state.set_state(DriverQuickOrderState.issue)
-    await message.answer(_t(language, "ask_issue"), reply_markup=issue_keyboard(language))
-
+    await message.answer(_t(lang, "ask_issue"), reply_markup=issue_keyboard(lang))
 
 @router.message(DriverQuickOrderState.issue)
 async def collect_issue(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
+    lang = await _get_current_language(state, message.from_user.id)
     issue = (message.text or "").strip()
-    if issue not in issue_options(language):
-        await message.answer(_t(language, "invalid_issue"), reply_markup=issue_keyboard(language))
+    if issue not in issue_options(lang):
+        await message.answer(_t(lang, "invalid_issue"), reply_markup=issue_keyboard(lang))
         return
-
-    await state.update_data(issue=issue, language=language)
+    await state.update_data(issue=issue)
     await state.set_state(DriverQuickOrderState.phone)
-    await message.answer(
-        _t(language, "ask_phone"),
-        reply_markup=request_phone_keyboard(language),
-    )
-
+    await message.answer(_t(lang, "ask_phone"), reply_markup=request_phone_keyboard(lang))
 
 @router.message(DriverQuickOrderState.phone, F.contact)
 async def collect_phone(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
-    if message.from_user is None:
-        await message.answer(_t(language, "user_missing"))
-        return
-
+    lang = await _get_current_language(state, message.from_user.id)
     contact = message.contact
-    if contact is None:
-        await message.answer(_t(language, "phone_missing"))
+    if not contact or (contact.user_id and contact.user_id != message.from_user.id):
+        await message.answer(_t(lang, "ask_own_phone"))
         return
-
-    if contact.user_id and contact.user_id != message.from_user.id:
-        await message.answer(_t(language, "ask_own_phone"))
-        return
-
-    await state.update_data(phone=contact.phone_number, language=language)
+    await state.update_data(phone=contact.phone_number)
     await state.set_state(DriverQuickOrderState.location)
-    await message.answer(
-        _t(language, "ask_location"),
-        reply_markup=request_location_keyboard(language),
-    )
-
+    await message.answer(_t(lang, "ask_location"), reply_markup=request_location_keyboard(lang))
 
 @router.message(DriverQuickOrderState.phone)
-async def phone_validation_hint(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
-    await message.answer(
-        _t(language, "phone_hint", button=button("phone", language)),
-        parse_mode="Markdown",
-        reply_markup=request_phone_keyboard(language),
-    )
-
+async def phone_hint(message: Message, state: FSMContext) -> None:
+    lang = await _get_current_language(state, message.from_user.id)
+    await message.answer(_t(lang, "phone_hint", button=button("phone", lang)), reply_markup=request_phone_keyboard(lang))
 
 @router.message(DriverQuickOrderState.location, F.location)
 async def collect_location(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
-    location = message.location
-    if location is None:
-        await message.answer(_t(language, "location_missing"))
-        return
-
-    await state.update_data(latitude=location.latitude, longitude=location.longitude, language=language)
+    lang = await _get_current_language(state, message.from_user.id)
+    await state.update_data(latitude=message.location.latitude, longitude=message.location.longitude)
     data = await state.get_data()
     maps = f"https://maps.google.com/?q={data['latitude']},{data['longitude']}"
-    summary = _t(
-        language,
-        "confirm_summary",
-        issue=data["issue"],
-        phone=data["phone"],
-        maps=maps,
-    )
-
+    summary = _t(lang, "confirm_summary", issue=data["issue"], phone=data["phone"], maps=maps)
     await state.set_state(DriverQuickOrderState.confirm)
-    await message.answer(summary, reply_markup=confirm_keyboard(language))
-
+    await message.answer(summary, reply_markup=confirm_keyboard(lang), parse_mode="Markdown")
 
 @router.message(DriverQuickOrderState.location)
-async def location_validation_hint(message: Message, state: FSMContext) -> None:
-    language = await _state_language(state, message.from_user.id if message.from_user else None)
-    await message.answer(
-        _t(language, "location_hint", button=button("location", language)),
-        parse_mode="Markdown",
-        reply_markup=request_location_keyboard(language),
-    )
-
+async def location_hint(message: Message, state: FSMContext) -> None:
+    lang = await _get_current_language(state, message.from_user.id)
+    await message.answer(_t(lang, "location_hint", button=button("location", lang)), reply_markup=request_location_keyboard(lang))
 
 @router.callback_query(DriverQuickOrderState.confirm, F.data == "order_cancel")
-async def cancel_order(callback: CallbackQuery, state: FSMContext) -> None:
-    language = await _state_language(state, callback.from_user.id if callback.from_user else None)
+async def cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    lang = await _get_current_language(state, callback.from_user.id)
     await state.clear()
-    await state.update_data(language=language)
+    await state.update_data(language=lang)
     msg = _safe_message(callback)
-    if msg is not None:
-        try:
-            await msg.edit_text(_t(language, "order_cancelled"))
-        except Exception:
-            pass
-        await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+    if msg:
+        try: await msg.edit_text(_t(lang, "order_cancelled"))
+        except: pass
+        await msg.answer(_t(lang, "main_menu"), reply_markup=start_keyboard(lang))
     await callback.answer()
-
 
 @router.callback_query(DriverQuickOrderState.confirm, F.data == "order_confirm")
 async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Buyurtma yuborilmoqda... / Заявка отправляется...")
-    
-    language = await _state_language(state, callback.from_user.id if callback.from_user else None)
-    if callback.from_user is None:
-        await callback.answer(_t(language, "user_missing"), show_alert=True)
-        return
-
+    lang = await _get_current_language(state, callback.from_user.id)
     data = await state.get_data()
-    language = normalize_language(str(data.get("language") or language))
-    
-    # Validation
-    required_fields = {"phone", "issue", "latitude", "longitude"}
-    if not required_fields.issubset(data):
-        await callback.answer("Buyurtma ma'lumotlari to'liq emas. Qayta boshlang.", show_alert=True)
-        await state.clear()
-        await state.update_data(language=language)
+    if not all(k in data for k in ["phone", "issue", "latitude", "longitude"]):
+        await callback.answer("Ma'lumotlar to'liq emas.", show_alert=True)
         return
 
-    # 2. Provide immediate feedback
     msg = _safe_message(callback)
-    original_text = msg.text if msg else ""
-    if msg:
-        try:
-            await msg.edit_text(f"⏳ **Buyurtma yuborilmoqda...**\n\n{original_text}", parse_mode="Markdown")
-        except Exception:
-            pass
+    if msg: 
+        try: await msg.edit_text(f"⏳ **Yuborilmoqda...**\n\n{msg.text}", parse_mode="Markdown")
+        except: pass
 
     try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
-            
-            order = await service.create_driver_order(
-                DriverOrderPayload(
-                    client_telegram_id=callback.from_user.id,
-                    full_name=callback.from_user.full_name,
-                    language=language,
-                    phone=data["phone"],
-                    issue_label=data["issue"],
-                    latitude=float(data["latitude"]),
-                    longitude=float(data["longitude"]),
-                )
-            )
-
-            alert_service = NotificationService(bot=callback.bot, settings=settings)
-            await alert_service.notify_new_order(
-                order_id=order.id,
-                client_telegram_id=callback.from_user.id,
-                phone=data["phone"],
-                issue=data["issue"],
-                latitude=float(data["latitude"]),
-                longitude=float(data["longitude"]),
-            )
-            await alert_service.notify_client_order_created(order)
-
-        await state.clear()
-        await state.update_data(language=language)
-        if msg:
-            try:
-                await msg.edit_text(_t(language, "order_created", order_id=order.id))
-            except Exception:
-                pass
-            await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+            order = await service.create_driver_order(DriverOrderPayload(client_telegram_id=callback.from_user.id, full_name=callback.from_user.full_name, language=lang, phone=data["phone"], issue_label=data["issue"], latitude=float(data["latitude"]), longitude=float(data["longitude"])))
+            ns = NotificationService(bot=callback.bot, settings=settings)
+            await ns.notify_new_order(order_id=order.id, client_telegram_id=callback.from_user.id, phone=data["phone"], issue=data["issue"], latitude=float(data["latitude"]), longitude=float(data["longitude"]))
+            await ns.notify_client_order_created(order)
         
-    except Exception as exc:
-        logger.exception("CRITICAL: confirm_order failed: %s", exc)
+        await state.clear()
+        await state.update_data(language=lang)
         if msg:
-            try:
-                error_hint = "\n\n❌ **Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.**"
-                await msg.edit_text(
-                    f"{original_text}{error_hint}", 
-                    parse_mode="Markdown", 
-                    reply_markup=confirm_keyboard(language)
-                )
-            except Exception:
-                await callback.answer("Texnik xatolik yuz berdi. Qayta urinib ko'ring.", show_alert=True)
-        return
-
+            try: await msg.edit_text(_t(lang, "order_created", order_id=order.id))
+            except: pass
+            await msg.answer(_t(lang, "main_menu"), reply_markup=start_keyboard(lang))
+    except Exception as exc:
+        logger.exception("Confirm order error: %s", exc)
+        await callback.answer("Texnik xatolik.", show_alert=True)
     await callback.answer()
