@@ -14,11 +14,11 @@ from src.db.session import AsyncSessionFactory, engine
 settings = get_settings()
 configure_logging(settings.log_level)
 
-app = FastAPI(title="AutoHelp API", version="0.1.0")
+from contextlib import asynccontextmanager
 
-
-@app.on_event("startup")
-async def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
     await wait_for_dependencies(
         redis_dsn=settings.redis_dsn,
         use_redis=settings.use_redis,
@@ -26,6 +26,10 @@ async def on_startup() -> None:
         delay_seconds=settings.dependency_wait_delay_seconds,
     )
     await init_db()
+    yield
+    # Shutdown logic (optional)
+
+app = FastAPI(title="AutoHelp API", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")

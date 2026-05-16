@@ -28,6 +28,10 @@ class Settings(BaseSettings):
 
     bot_token: str | None = None
     
+    # API Settings
+    api_host: str = "0.0.0.0"
+    api_port: int = 8080
+    
     # Dispatcher Settings
     dispatcher_ids: str | None = None
     dispatcher_chat_id: int | None = None
