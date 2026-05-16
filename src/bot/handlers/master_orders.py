@@ -135,7 +135,14 @@ async def my_jobs(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("master_accept:"))
 async def cb_accept_order(callback: CallbackQuery) -> None:
-    order_id = int(callback.data.split(":")[1])
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        order_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
+        return
     master_telegram_id = callback.from_user.id
 
     try:
@@ -163,7 +170,14 @@ async def cb_accept_order(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("master_reject:"))
 async def cb_reject_order(callback: CallbackQuery) -> None:
-    order_id = int(callback.data.split(":")[1])
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        order_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
+        return
     master_telegram_id = callback.from_user.id
 
     try:
@@ -188,9 +202,16 @@ async def cb_reject_order(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("master_status:"))
 async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
-    parts = callback.data.split(":")
-    order_id = int(parts[1])
-    alias = parts[2]
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        parts = callback.data.split(":")
+        order_id = int(parts[1])
+        alias = parts[2]
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri status so'rovi.", show_alert=True)
+        return
     master_telegram_id = callback.from_user.id
 
     to_status = MASTER_STATUS_ALIASES.get(alias)

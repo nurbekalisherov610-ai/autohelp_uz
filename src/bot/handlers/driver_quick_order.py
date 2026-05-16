@@ -148,32 +148,45 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(DriverQuickOrderState.language, F.data.startswith("language:"))
 async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
-    language = normalize_language(callback.data.split(":", 1)[1])
-    await state.clear()
-    await state.update_data(language=language)
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
 
-    if callback.message is not None:
-        try:
-            await callback.message.edit_text(_t(language, "welcome"))
-        except Exception:
-            pass
-        await callback.message.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+    try:
+        language = normalize_language(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri til tanlandi.", show_alert=True)
+        return
 
-    if callback.from_user is not None:
-        async with AsyncSessionFactory() as session:
-            user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
-            if user is None:
-                user = User(
-                    telegram_id=callback.from_user.id,
-                    full_name=callback.from_user.full_name,
-                    language=language,
-                )
-                session.add(user)
-            else:
-                user.language = language
-                if callback.from_user.full_name:
-                    user.full_name = callback.from_user.full_name
-            await session.commit()
+    try:
+        await state.clear()
+        await state.update_data(language=language)
+
+        if callback.message is not None:
+            try:
+                await callback.message.edit_text(_t(language, "welcome"))
+            except Exception:
+                pass
+            await callback.message.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+
+        if callback.from_user is not None:
+            async with AsyncSessionFactory() as session:
+                user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+                if user is None:
+                    user = User(
+                        telegram_id=callback.from_user.id,
+                        full_name=callback.from_user.full_name,
+                        language=language,
+                    )
+                    session.add(user)
+                else:
+                    user.language = language
+                    if callback.from_user.full_name:
+                        user.full_name = callback.from_user.full_name
+                await session.commit()
+    except Exception:
+        await callback.answer("Texnik xatolik yuz berdi.", show_alert=True)
+        return
 
     await callback.answer()
 
@@ -287,7 +300,10 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext) -> None:
     language = await _state_language(state, callback.from_user.id if callback.from_user else None)
     await state.clear()
     if callback.message is not None:
-        await callback.message.edit_text(_t(language, "order_cancelled"))
+        try:
+            await callback.message.edit_text(_t(language, "order_cancelled"))
+        except Exception:
+            pass
         await callback.message.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
     await callback.answer()
 
@@ -301,31 +317,40 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
 
     data = await state.get_data()
     language = normalize_language(str(data.get("language") or language))
+    required_fields = {"phone", "issue", "latitude", "longitude"}
+    if not required_fields.issubset(data):
+        await callback.answer("Buyurtma ma'lumotlari to'liq emas. Qayta boshlang.", show_alert=True)
+        await state.clear()
+        return
 
-    async with AsyncSessionFactory() as session:
-        order_service = OrderService(session)
-        order = await order_service.create_driver_order(
-            DriverOrderPayload(
-                client_telegram_id=callback.from_user.id,
-                full_name=callback.from_user.full_name,
-                language=language,
-                phone=data["phone"],
-                issue_label=data["issue"],
-                latitude=float(data["latitude"]),
-                longitude=float(data["longitude"]),
+    try:
+        async with AsyncSessionFactory() as session:
+            order_service = OrderService(session)
+            order = await order_service.create_driver_order(
+                DriverOrderPayload(
+                    client_telegram_id=callback.from_user.id,
+                    full_name=callback.from_user.full_name,
+                    language=language,
+                    phone=data["phone"],
+                    issue_label=data["issue"],
+                    latitude=float(data["latitude"]),
+                    longitude=float(data["longitude"]),
+                )
             )
-        )
 
-    alert_service = NotificationService(bot=callback.bot, settings=settings)
-    await alert_service.notify_new_order(
-        order_id=order.id,
-        client_telegram_id=callback.from_user.id,
-        phone=data["phone"],
-        issue=data["issue"],
-        latitude=float(data["latitude"]),
-        longitude=float(data["longitude"]),
-    )
-    await alert_service.notify_client_order_created(order)
+        alert_service = NotificationService(bot=callback.bot, settings=settings)
+        await alert_service.notify_new_order(
+            order_id=order.id,
+            client_telegram_id=callback.from_user.id,
+            phone=data["phone"],
+            issue=data["issue"],
+            latitude=float(data["latitude"]),
+            longitude=float(data["longitude"]),
+        )
+        await alert_service.notify_client_order_created(order)
+    except Exception:
+        await callback.answer("Texnik xatolik yuz berdi. Iltimos qayta urinib ko'ring.", show_alert=True)
+        return
 
     await state.clear()
     if callback.message is not None:

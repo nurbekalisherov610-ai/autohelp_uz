@@ -128,7 +128,14 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    order_id = int(callback.data.split(":")[1])
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        order_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
+        return
 
     # Verify order still exists and is assignable before showing master list
     try:
@@ -199,9 +206,16 @@ async def cb_select_master(callback: CallbackQuery) -> None:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    parts = callback.data.split(":")
-    order_id = int(parts[1])
-    master_telegram_id = int(parts[2])
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        parts = callback.data.split(":")
+        order_id = int(parts[1])
+        master_telegram_id = int(parts[2])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri master tanlovi.", show_alert=True)
+        return
     dispatcher_telegram_id = callback.from_user.id
 
     try:
@@ -226,7 +240,8 @@ async def cb_select_master(callback: CallbackQuery) -> None:
         await callback.answer(str(exc), show_alert=True)
         return
 
-    await callback.message.edit_text(f"✅ Buyurtma #{order.id} 👨‍🔧 {master_name} ga muvaffaqiyatli biriktirildi.")
+    if callback.message is not None:
+        await callback.message.edit_text(f"✅ Buyurtma #{order.id} 👨‍🔧 {master_name} ga muvaffaqiyatli biriktirildi.")
     await callback.answer()
 
 
@@ -238,7 +253,14 @@ async def cb_complete_order(callback: CallbackQuery) -> None:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    order_id = int(callback.data.split(":")[1])
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        order_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
+        return
     dispatcher_telegram_id = callback.from_user.id
 
     try:
@@ -276,7 +298,14 @@ async def cb_cancel_order(callback: CallbackQuery) -> None:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    order_id = int(callback.data.split(":")[1])
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        order_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
+        return
 
     try:
         async with AsyncSessionFactory() as session:
@@ -453,7 +482,14 @@ async def cb_order_detail_inline(callback: CallbackQuery) -> None:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    order_id = int(callback.data.split(":")[1])
+    if not callback.data:
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    try:
+        order_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
+        return
 
     try:
         async with AsyncSessionFactory() as session:
