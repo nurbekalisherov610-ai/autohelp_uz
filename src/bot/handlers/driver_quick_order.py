@@ -87,15 +87,33 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.callback_query(DriverQuickOrderState.language, F.data.startswith("language:"))
 @router.callback_query(F.data.startswith("language:")) # Allow global language change
 async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
-    language = normalize_language(callback.data.split(":")[1])
-    async with AsyncSessionFactory() as session:
-        user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
-        if not user:
-            user = User(telegram_id=callback.from_user.id, full_name=callback.from_user.full_name, language=language)
-            session.add(user)
-        else:
-            user.language = language
-        await session.commit()
+    if callback.from_user is None:
+        await callback.answer("Foydalanuvchi ma'lumotlari olinmadi.", show_alert=True)
+        return
+
+    try:
+        language = normalize_language(callback.data.split(":")[1])
+        async with AsyncSessionFactory() as session:
+            # Check if user exists
+            user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+            if not user:
+                user = User(
+                    telegram_id=callback.from_user.id, 
+                    full_name=callback.from_user.full_name, 
+                    language=language
+                )
+                session.add(user)
+            else:
+                user.language = language
+                if callback.from_user.full_name:
+                    user.full_name = callback.from_user.full_name
+            
+            await session.commit()
+    except Exception as exc:
+        logger.exception("DATABASE ERROR in choose_language for user %s: %s", callback.from_user.id, exc)
+        # Re-raise so global error handler can notify admin, but provide immediate answer to user
+        await callback.answer("Texnik xatolik (DB). Dispecherga xabar berildi.", show_alert=True)
+        raise exc
     
     await state.clear()
     await state.update_data(language=language)

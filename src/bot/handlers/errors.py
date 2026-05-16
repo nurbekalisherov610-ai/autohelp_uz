@@ -1,41 +1,64 @@
 import logging
+import traceback
 
 from aiogram import Router
 from aiogram.types import ErrorEvent
 
+from src.core.config import get_settings
+
 router = Router(name="errors")
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 @router.errors()
 async def global_error_handler(event: ErrorEvent) -> bool:
-    """Catch every unhandled exception so the bot never crashes silently.
-
-    Logs the full traceback and sends a user-friendly message when possible.
-    """
+    """Catch every unhandled exception so the bot never crashes silently."""
+    exc = event.exception
+    update = event.update
+    
+    # 1. Log the error with full traceback
     logger.exception(
-        "Unhandled bot error in update %s",
-        event.update.update_id,
-        exc_info=event.exception,
+        "CRITICAL: Unhandled bot error in update %s: %s",
+        update.update_id,
+        exc,
     )
 
-    # Try to notify the user about the error
+    # 2. Extract error details for admin notification
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    error_report = (
+        f"🚨 **UNHANDLED BOT ERROR**\n\n"
+        f"Update ID: `{update.update_id}`\n"
+        f"Error: `{str(exc)}`\n\n"
+        f"Traceback:\n<pre>{tb[:3000]}</pre>"
+    )
+
+    # 3. Notify the user
     try:
-        if event.update.message:
-            await event.update.message.answer(
-                "Texnik xatolik yuz berdi. Iltimos, 1-2 daqiqadan keyin qayta urinib ko'ring."
+        if update.message:
+            await update.message.answer(
+                "Texnik xatolik yuz berdi. Iltimos, 1-2 daqiqadan keyin qayta urinib ko'ring.\n"
+                "Dispecherlarga xabar yuborildi."
             )
-        elif event.update.callback_query:
-            cb = event.update.callback_query
-            try:
-                await cb.answer(
-                    "Texnik xatolik yuz berdi.",
-                    show_alert=True,
-                )
-            except Exception:
-                pass
+        elif update.callback_query:
+            await update.callback_query.answer(
+                "Texnik xatolik yuz berdi. Qayta urinib ko'ring.",
+                show_alert=True,
+            )
     except Exception:
-        # If even error-reporting fails, just log it
-        logger.exception("Failed to send error notification to user")
+        pass
+
+    # 4. Notify Admins if configured
+    try:
+        admin_ids = settings.parsed_admin_ids
+        if admin_ids:
+            # Notify the first admin as a primary alert
+            await event.bot.send_message(
+                chat_id=admin_ids[0],
+                text=error_report,
+                parse_mode="Markdown"
+            )
+    except Exception as notify_exc:
+        logger.error("Failed to notify admins about error: %s", notify_exc)
 
     return True
