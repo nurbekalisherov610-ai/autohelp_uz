@@ -1,10 +1,11 @@
+import asyncio
 import logging
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.bot.keyboards.driver import normalize_language
-from src.core.config import Settings
+from src.core.config import PLACEHOLDER_CHAT_IDS, Settings
 from src.db.enums import OrderStatus
 from src.db.models.order import Order
 
@@ -68,7 +69,33 @@ class NotificationService:
             else:
                 await self.bot.send_video_note(chat_id=chat_id, video_note=file_id)
         except Exception as exc:
-            logger.exception("Failed to send configured confirmation video to %s: %s", chat_id, exc)
+            logger.warning("Failed to send video (kind=%s) to %s, trying fallback: %s", kind, chat_id, exc)
+            try:
+                # Absolute fallback to whatever works
+                if kind in {"video", "regular_video"}:
+                    await self.bot.send_video_note(chat_id=chat_id, video_note=file_id)
+                else:
+                    await self.bot.send_video(chat_id=chat_id, video=file_id)
+            except Exception as exc2:
+                logger.error("Final video send failure for %s: %s", chat_id, exc2)
+
+    def _get_broadcast_targets(self) -> set[int]:
+        """Collect all relevant chat IDs for dispatcher/admin notifications."""
+        targets = set()
+        
+        # 1. Main resolved chat (usually the group)
+        main = self.settings.resolved_dispatcher_chat_id
+        if main:
+            targets.add(main)
+            
+        # 2. All individual dispatchers
+        targets.update(self.settings.parsed_dispatcher_ids)
+        
+        # 3. All individual admins (Superadmins)
+        targets.update(self.settings.parsed_admin_ids)
+        
+        # Remove placeholders and invalid IDs
+        return {t for t in targets if t and t not in PLACEHOLDER_CHAT_IDS}
 
     async def notify_new_order(
         self,
@@ -80,39 +107,40 @@ class NotificationService:
         latitude: float,
         longitude: float,
     ) -> None:
-        if self.settings.resolved_dispatcher_chat_id is None:
-            return
-
         maps_link = f"https://maps.google.com/?q={latitude},{longitude}"
         text = (
-            "Yangi buyurtma (NEW)\n"
-            f"Buyurtma ID: #{order_id}\n"
-            f"Mijoz ID: {client_telegram_id}\n"
-            f"Telefon: {phone}\n"
-            f"Muammo: {issue}\n"
-            f"Lokatsiya: {maps_link}\n"
-            "Status: NEW"
+            "🚀 **Yangi buyurtma (NEW)**\n\n"
+            f"🆔 **ID**: #{order_id}\n"
+            f"👤 **Mijoz ID**: {client_telegram_id}\n"
+            f"📞 **Telefon**: {phone}\n"
+            f"🛠 **Muammo**: {issue}\n"
+            f"📍 **Lokatsiya**: [Google Maps]({maps_link})\n\n"
+            "⚠️ *Iltimos, ustani biriktirish uchun quyidagi tugmani bosing.*"
         )
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"Qabul qilish #{order_id}",
+                        text=f"👨‍🔧 Biriktirish #{order_id}",
                         callback_data=f"dispatch_assign:{order_id}",
                     )
                 ]
             ]
         )
 
-        try:
-            await self.bot.send_message(
-                chat_id=self.settings.resolved_dispatcher_chat_id,
-                text=text,
-                reply_markup=keyboard,
-            )
-        except Exception as exc:
-            logger.exception("Failed to send new order notification: %s", exc)
+        # Broadcast to all relevant recipients (group, dispatchers, admins)
+        targets = self._get_broadcast_targets()
+        for target_id in targets:
+            try:
+                await self.bot.send_message(
+                    chat_id=target_id,
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown",
+                )
+            except Exception as exc:
+                logger.error("Failed to broadcast new order to %s: %s", target_id, exc)
 
     async def notify_client_order_created(self, order: Order) -> None:
         if not order.client or not order.client.telegram_id:
@@ -122,18 +150,23 @@ class NotificationService:
         client_id = order.client.telegram_id
         language = normalize_language(order.client.language)
         
+        # 1. Send text confirmation immediately
         try:
-            # 1. Send confirmation video/note if configured
-            await self._send_configured_confirmation_video(client_id, language)
-        except Exception as exc:
-            logger.error("Failed to send confirmation video to %s: %s", client_id, exc)
-
-        try:
-            # 2. Send text confirmation
             text = CLIENT_TEXT["created"][language].format(order_id=order.id)
             await self.bot.send_message(chat_id=client_id, text=text)
         except Exception as exc:
             logger.error("Failed to send text confirmation to %s: %s", client_id, exc)
+
+        # 2. Schedule confirmation video/note after 10 seconds in a background task
+        asyncio.create_task(self._delayed_video_note(client_id, language))
+
+    async def _delayed_video_note(self, chat_id: int, language: str) -> None:
+        """Wait 10 seconds and then send the video note."""
+        await asyncio.sleep(10)
+        try:
+            await self._send_configured_confirmation_video(chat_id, language)
+        except Exception as exc:
+            logger.error("Delayed video note failed for %s: %s", chat_id, exc)
 
     async def notify_master_new_assignment(self, order: Order, master_telegram_id: int) -> None:
         text = (
@@ -203,48 +236,42 @@ class NotificationService:
 
         try:
             await self.bot.send_message(chat_id=client_id, text=text, reply_markup=keyboard)
-            if status == OrderStatus.ASSIGNED:
-                await self._send_configured_confirmation_video(client_id, order.client.language)
         except Exception as exc:
             logger.exception("Failed to send client notification to %s: %s", client_id, exc)
 
     async def notify_dispatcher_completion_review(self, order: Order, master_name: str) -> None:
-        if self.settings.resolved_dispatcher_chat_id is None:
-            return
-
         text = (
-            f"👨‍🔧 {master_name} ishni tugatdi.\n"
-            f"Buyurtma: #{order.id}\n"
-            f"Summa: {order.final_amount} so'm"
+            f"👨‍🔧 **{master_name}** ishni tugatdi.\n\n"
+            f"🆔 **Buyurtma**: #{order.id}\n"
+            f"💰 **Summa**: {order.final_amount:,.0f} so'm\n"
+            "🎬 *Video isbot ilova qilindi.*"
         )
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="💰 Tasdiqlash",
+                        text="✅ To'lovni tasdiqlash",
                         callback_data=f"dispatch_complete:{order.id}",
                     )
                 ]
             ]
         )
 
-        try:
-            if order.video_file_id:
-                try:
-                    await self.bot.send_video_note(
-                        chat_id=self.settings.resolved_dispatcher_chat_id,
-                        video_note=order.video_file_id,
-                    )
-                except Exception:
-                    await self.bot.send_video(
-                        chat_id=self.settings.resolved_dispatcher_chat_id,
-                        video=order.video_file_id,
-                    )
-            await self.bot.send_message(
-                chat_id=self.settings.resolved_dispatcher_chat_id,
-                text=text,
-                reply_markup=keyboard,
-            )
-        except Exception as exc:
-            logger.exception("Failed to send dispatcher completion review: %s", exc)
+        targets = self._get_broadcast_targets()
+        for target_id in targets:
+            try:
+                if order.video_file_id:
+                    try:
+                        await self.bot.send_video_note(chat_id=target_id, video_note=order.video_file_id)
+                    except Exception:
+                        await self.bot.send_video(chat_id=target_id, video=order.video_file_id)
+                
+                await self.bot.send_message(
+                    chat_id=target_id,
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown",
+                )
+            except Exception as exc:
+                logger.error("Failed to broadcast completion review to %s: %s", target_id, exc)

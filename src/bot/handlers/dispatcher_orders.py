@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
-from src.core.config import get_settings
+from src.core.config import PLACEHOLDER_CHAT_IDS, get_settings
 from src.db.enums import OrderStatus
 from src.db.models.order import Order
 from src.db.models.user import User
@@ -286,8 +286,6 @@ async def cb_select_master(callback: CallbackQuery) -> None:
         except TelegramBadRequest:
             pass
     await callback.answer()
-
-
 
 
 @router.callback_query(F.data.startswith("dispatch_complete:"))
@@ -572,17 +570,17 @@ async def cb_order_detail_inline(callback: CallbackQuery) -> None:
     if order.status in (OrderStatus.NEW, OrderStatus.REJECTED):
         buttons.append([InlineKeyboardButton(
             text="📝 Master biriktirish",
-            callback_data=f"dispatch_assign:{order.id}",
+            callback_data=f"dispatch_assign:{order_id}",
         )])
     if order.status == OrderStatus.AWAITING_CONFIRM:
         buttons.append([InlineKeyboardButton(
             text="💰 Tasdiqlash",
-            callback_data=f"dispatch_complete:{order.id}",
+            callback_data=f"dispatch_complete:{order_id}",
         )])
     if order.status not in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
         buttons.append([InlineKeyboardButton(
             text="🚫 Bekor qilish",
-            callback_data=f"dispatch_cancel:{order.id}",
+            callback_data=f"dispatch_cancel:{order_id}",
         )])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
