@@ -125,25 +125,6 @@ async def _get_saved_language(telegram_id: int | None) -> str:
         return normalize_language(user.language if user else None)
 
 
-async def _upsert_user_language(message: Message, language: str) -> None:
-    if message.from_user is None:
-        return
-    async with AsyncSessionFactory() as session:
-        user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-        if user is None:
-            user = User(
-                telegram_id=message.from_user.id,
-                full_name=message.from_user.full_name,
-                language=language,
-            )
-            session.add(user)
-        else:
-            user.language = language
-            if message.from_user.full_name:
-                user.full_name = message.from_user.full_name
-        await session.commit()
-
-
 async def _state_language(state: FSMContext, user_id: int | None = None) -> str:
     data = await state.get_data()
     if data.get("language"):
@@ -335,16 +316,30 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
 
     data = await state.get_data()
     language = normalize_language(str(data.get("language") or language))
+    
+    # Validation
     required_fields = {"phone", "issue", "latitude", "longitude"}
     if not required_fields.issubset(data):
         await callback.answer("Buyurtma ma'lumotlari to'liq emas. Qayta boshlang.", show_alert=True)
         await state.clear()
         return
 
+    # 2. Provide immediate feedback and prevent double-clicks by updating the UI
+    msg = _safe_message(callback)
+    original_text = msg.text if msg else ""
+    if msg:
+        try:
+            # We add a bold processing indicator to the top of the message
+            await msg.edit_text(f"⏳ **Buyurtma yuborilmoqda...**\n\n{original_text}", parse_mode="Markdown")
+        except Exception:
+            pass
+
     try:
         async with AsyncSessionFactory() as session:
-            order_service = OrderService(session)
-            order = await order_service.create_driver_order(
+            service = OrderService(session)
+            
+            # Create the order in the database
+            order = await service.create_driver_order(
                 DriverOrderPayload(
                     client_telegram_id=callback.from_user.id,
                     full_name=callback.from_user.full_name,
@@ -356,32 +351,45 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
                 )
             )
 
-        alert_service = NotificationService(bot=callback.bot, settings=settings)
-        await alert_service.notify_new_order(
-            order_id=order.id,
-            client_telegram_id=callback.from_user.id,
-            phone=data["phone"],
-            issue=data["issue"],
-            latitude=float(data["latitude"]),
-            longitude=float(data["longitude"]),
-        )
-        await alert_service.notify_client_order_created(order)
+            # Notifications (each has its own internal try/except for resilience)
+            alert_service = NotificationService(bot=callback.bot, settings=settings)
+            
+            # Notify Dispatcher(s)
+            await alert_service.notify_new_order(
+                order_id=order.id,
+                client_telegram_id=callback.from_user.id,
+                phone=data["phone"],
+                issue=data["issue"],
+                latitude=float(data["latitude"]),
+                longitude=float(data["longitude"]),
+            )
+            
+            # Notify Client (Confirmation video + text)
+            await alert_service.notify_client_order_created(order)
+
+        # 3. Success! Clear FSM state and update UI
+        await state.clear()
+        if msg:
+            try:
+                await msg.edit_text(_t(language, "order_created", order_id=order.id))
+            except Exception:
+                pass
+            await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+        
     except Exception as exc:
         logger.exception("CRITICAL: confirm_order failed for user %s: %s", 
                          callback.from_user.id if callback.from_user else "unknown", exc)
-        await callback.answer("Texnik xatolik yuz berdi. Iltimos qayta urinib ko'ring.", show_alert=True)
-        # We don't clear state here so they can try again if it was a transient network error
+        if msg:
+            try:
+                # Restore original text with a clear error hint so user knows it failed
+                error_hint = "\n\n❌ **Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.**"
+                await msg.edit_text(
+                    f"{original_text}{error_hint}", 
+                    parse_mode="Markdown", 
+                    reply_markup=confirm_keyboard(language)
+                )
+            except Exception:
+                await callback.answer("Texnik xatolik yuz berdi. Qayta urinib ko'ring.", show_alert=True)
         return
 
-    await state.clear()
-    msg = _safe_message(callback)
-    if msg is not None:
-        try:
-            await msg.edit_text(_t(language, "order_created", order_id=order.id))
-        except Exception:
-            pass
-        await msg.answer(
-            _t(language, "main_menu"),
-            reply_markup=start_keyboard(language),
-        )
     await callback.answer()

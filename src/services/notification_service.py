@@ -116,13 +116,24 @@ class NotificationService:
 
     async def notify_client_order_created(self, order: Order) -> None:
         if not order.client or not order.client.telegram_id:
+            logger.warning("Order #%s has no client object loaded for notification.", order.id)
             return
 
         client_id = order.client.telegram_id
+        language = normalize_language(order.client.language)
+        
         try:
-            await self._send_configured_confirmation_video(client_id, order.client.language)
+            # 1. Send confirmation video/note if configured
+            await self._send_configured_confirmation_video(client_id, language)
         except Exception as exc:
-            logger.exception("Failed to send order-created notification to %s: %s", client_id, exc)
+            logger.error("Failed to send confirmation video to %s: %s", client_id, exc)
+
+        try:
+            # 2. Send text confirmation
+            text = CLIENT_TEXT["created"][language].format(order_id=order.id)
+            await self.bot.send_message(chat_id=client_id, text=text)
+        except Exception as exc:
+            logger.error("Failed to send text confirmation to %s: %s", client_id, exc)
 
     async def notify_master_new_assignment(self, order: Order, master_telegram_id: int) -> None:
         text = (
