@@ -52,12 +52,14 @@ async def global_error_handler(event: ErrorEvent) -> bool:
     try:
         admin_ids = settings.parsed_admin_ids
         if admin_ids:
-            # Notify the first admin as a primary alert
-            await event.bot.send_message(
-                chat_id=admin_ids[0],
-                text=error_report,
-                parse_mode="Markdown"
-            )
+            bot = update.get_bot()
+            if bot:
+                # Notify the first admin as a primary alert
+                await bot.send_message(
+                    chat_id=admin_ids[0],
+                    text=error_report,
+                    parse_mode="Markdown"
+                )
     except Exception as notify_exc:
         logger.error("Failed to notify admins about error: %s", notify_exc)
 
