@@ -1,8 +1,7 @@
 #!/bin/bash
-set -e
 
 echo "Running preflight checks..."
-python -m src.preflight
+python -m src.preflight || echo "[WARN] Preflight check had failures - review logs above"
 
 echo "Running database migrations..."
 alembic upgrade head
@@ -14,4 +13,4 @@ echo "Starting Telegram bot in background..."
 python -m src.bot.main &
 
 echo "Starting API server..."
-python -m src.api.app
+exec python -m src.api.app

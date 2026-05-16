@@ -25,7 +25,7 @@ class NotificationService:
         latitude: float,
         longitude: float,
     ) -> None:
-        if self.settings.dispatcher_chat_id is None:
+        if self.settings.resolved_dispatcher_chat_id is None:
             return
 
         maps_link = f"https://maps.google.com/?q={latitude},{longitude}"
@@ -52,7 +52,7 @@ class NotificationService:
 
         try:
             await self.bot.send_message(
-                chat_id=self.settings.dispatcher_chat_id,
+                chat_id=self.settings.resolved_dispatcher_chat_id,
                 text=text,
                 reply_markup=keyboard,
             )
@@ -133,7 +133,7 @@ class NotificationService:
 
 
     async def notify_dispatcher_completion_review(self, order: Order, master_name: str) -> None:
-        if self.settings.dispatcher_chat_id is None:
+        if self.settings.resolved_dispatcher_chat_id is None:
             return
 
         text = (
@@ -157,14 +157,14 @@ class NotificationService:
             if order.video_file_id:
                 try:
                     await self.bot.send_video_note(
-                        chat_id=self.settings.dispatcher_chat_id, 
+                        chat_id=self.settings.resolved_dispatcher_chat_id, 
                         video_note=order.video_file_id
                     )
                 except Exception:
                     await self.bot.send_video(
-                        chat_id=self.settings.dispatcher_chat_id,
+                        chat_id=self.settings.resolved_dispatcher_chat_id,
                         video=order.video_file_id
                     )
-            await self.bot.send_message(chat_id=self.settings.dispatcher_chat_id, text=text, reply_markup=keyboard)
+            await self.bot.send_message(chat_id=self.settings.resolved_dispatcher_chat_id, text=text, reply_markup=keyboard)
         except Exception as exc:
             logger.exception("Failed to send dispatcher completion review: %s", exc)

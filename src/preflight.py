@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -104,17 +104,21 @@ async def check_redis(settings) -> CheckResult:
 
 
 def check_dispatcher_config(settings) -> CheckResult:
-    if settings.dispatcher_chat_id in PLACEHOLDER_DISPATCHER_IDS:
+    chat_id = settings.resolved_dispatcher_chat_id
+    if chat_id in PLACEHOLDER_DISPATCHER_IDS:
         return CheckResult(
             name="dispatcher_chat_id",
             ok=False,
-            detail="DISPATCHER_CHAT_ID is missing or placeholder",
+            detail=(
+                "DISPATCHER_CHAT_ID is missing or placeholder. "
+                "Set DISPATCHER_CHAT_ID, DISPATCHER_IDS, or DISPATCHER_GROUP_ID."
+            ),
             required=True,
         )
     return CheckResult(
         name="dispatcher_chat_id",
         ok=True,
-        detail=f"Dispatcher chat id configured ({settings.dispatcher_chat_id})",
+        detail=f"Dispatcher chat id configured ({chat_id})",
         required=True,
     )
 

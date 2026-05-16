@@ -36,12 +36,12 @@ async def _fetch_stale_orders(status: OrderStatus, threshold_minutes: int) -> li
 
 
 async def _send_dispatcher_alert(bot: Bot | None, text: str) -> None:
-    if bot is None or settings.dispatcher_chat_id is None:
+    if bot is None or settings.resolved_dispatcher_chat_id is None:
         logger.warning("Dispatcher alert skipped: bot token or dispatcher chat id not configured")
         return
 
     try:
-        await bot.send_message(chat_id=settings.dispatcher_chat_id, text=text)
+        await bot.send_message(chat_id=settings.resolved_dispatcher_chat_id, text=text)
     except Exception as exc:  # pragma: no cover
         logger.exception("Failed to send dispatcher alert: %s", exc)
 
@@ -77,7 +77,7 @@ async def daily_backup_report() -> None:
 
 
 async def stats_report_tick(bot: Bot | None) -> None:
-    if bot is None or settings.dispatcher_chat_id is None:
+    if bot is None or settings.resolved_dispatcher_chat_id is None:
         return
         
     from datetime import UTC, datetime, time
@@ -118,7 +118,7 @@ async def stats_report_tick(bot: Bot | None) -> None:
     )
     
     try:
-        await bot.send_message(chat_id=settings.dispatcher_chat_id, text=text)
+        await bot.send_message(chat_id=settings.resolved_dispatcher_chat_id, text=text)
     except Exception as exc:
         logger.exception("Failed to send daily report: %s", exc)
 
