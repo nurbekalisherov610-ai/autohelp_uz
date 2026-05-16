@@ -1,8 +1,12 @@
+import logging
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from src.bot.keyboards.driver import (
     BUTTONS,
@@ -27,6 +31,14 @@ from src.services.order_service import DriverOrderPayload, OrderService
 
 router = Router(name="driver_quick_order")
 settings = get_settings()
+
+
+def _safe_message(callback: CallbackQuery) -> Message | None:
+    """Return the real Message object or None if the message is inaccessible."""
+    msg = callback.message
+    if msg is None or isinstance(msg, InaccessibleMessage):
+        return None
+    return msg
 
 TEXT: dict[str, dict[str, str]] = {
     "choose_language": {
@@ -162,12 +174,13 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await state.update_data(language=language)
 
-        if callback.message is not None:
+        msg = _safe_message(callback)
+        if msg is not None:
             try:
-                await callback.message.edit_text(_t(language, "welcome"))
+                await msg.edit_text(_t(language, "welcome"))
             except Exception:
                 pass
-            await callback.message.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+            await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
 
         if callback.from_user is not None:
             async with AsyncSessionFactory() as session:
@@ -185,6 +198,7 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
                         user.full_name = callback.from_user.full_name
                 await session.commit()
     except Exception:
+        logger.exception("Error in choose_language")
         await callback.answer("Texnik xatolik yuz berdi.", show_alert=True)
         return
 
@@ -299,12 +313,13 @@ async def location_validation_hint(message: Message, state: FSMContext) -> None:
 async def cancel_order(callback: CallbackQuery, state: FSMContext) -> None:
     language = await _state_language(state, callback.from_user.id if callback.from_user else None)
     await state.clear()
-    if callback.message is not None:
+    msg = _safe_message(callback)
+    if msg is not None:
         try:
-            await callback.message.edit_text(_t(language, "order_cancelled"))
+            await msg.edit_text(_t(language, "order_cancelled"))
         except Exception:
             pass
-        await callback.message.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+        await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
     await callback.answer()
 
 
@@ -353,9 +368,13 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await state.clear()
-    if callback.message is not None:
-        await callback.message.edit_text(_t(language, "order_created", order_id=order.id))
-        await callback.message.answer(
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text(_t(language, "order_created", order_id=order.id))
+        except Exception:
+            pass
+        await msg.answer(
             _t(language, "main_menu"),
             reply_markup=start_keyboard(language),
         )

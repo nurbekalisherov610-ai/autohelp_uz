@@ -1,9 +1,13 @@
+import logging
+
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InaccessibleMessage, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
+
+logger = logging.getLogger(__name__)
 
 from src.core.config import get_settings
 from src.db.enums import OrderStatus
@@ -21,10 +25,17 @@ settings = get_settings()
 
 
 def _dispatcher_user_ids() -> set[int]:
+    """Return set of user IDs allowed to perform dispatcher actions."""
     ids = set(settings.parsed_dispatcher_ids)
+    # Admins also get dispatcher permissions (Superadmins)
+    ids.update(settings.parsed_admin_ids)
+    
     if settings.dispatcher_chat_id and settings.dispatcher_chat_id > 0:
         ids.add(settings.dispatcher_chat_id)
-    return ids
+    if settings.admin_chat_id and settings.admin_chat_id > 0:
+        ids.add(settings.admin_chat_id)
+        
+    return {i for i in ids if i and i not in PLACEHOLDER_CHAT_IDS}
 
 
 def _dispatcher_chat_ids() -> set[int]:
@@ -36,14 +47,23 @@ def _dispatcher_chat_ids() -> set[int]:
 
 
 def _is_dispatcher_context(chat_id: int, user_id: int | None) -> bool:
+    """Check if the current message/callback comes from an authorized dispatcher context."""
     user_ids = _dispatcher_user_ids()
     chat_ids = _dispatcher_chat_ids()
+    
+    # If no restrictions configured, allow everyone (dev mode)
     if not user_ids and not chat_ids and settings.resolved_dispatcher_chat_id is None:
         return True
+        
+    # 1. Check if specific user is an authorized dispatcher/admin
     if user_id is not None and user_id in user_ids:
         return True
-    if not user_ids and chat_id in chat_ids:
+        
+    # 2. Check if interaction is happening within an authorized group chat
+    # (Only if no specific user whitelist is strictly enforced, or if user is unknown)
+    if chat_id in chat_ids:
         return True
+        
     return False
 
 
@@ -55,10 +75,15 @@ def _is_dispatcher_message(message: Message) -> bool:
 
 
 def _is_dispatcher_callback(callback: CallbackQuery) -> bool:
-    if callback.message is None:
+    msg = _safe_message(callback)
+    if msg is None:
+        # Fallback: if message is inaccessible, check user-only context
+        user_id = callback.from_user.id if callback.from_user else None
+        if user_id is not None and user_id in _dispatcher_user_ids():
+            return True
         return False
     return _is_dispatcher_context(
-        chat_id=callback.message.chat.id,
+        chat_id=msg.chat.id,
         user_id=callback.from_user.id if callback.from_user else None,
     )
 
@@ -73,6 +98,14 @@ def _configured_master_label(master_id: int) -> str:
     if index < len(labels) and labels[index]:
         return labels[index]
     return str(master_id)
+
+def _safe_message(callback: CallbackQuery) -> Message | None:
+    """Return the real Message object or None if the message is inaccessible."""
+    msg = callback.message
+    if msg is None or isinstance(msg, InaccessibleMessage):
+        return None
+    return msg
+
 
 def _order_card_text(order_id: int, phone: str, issue_label: str, latitude: float, longitude: float, status_name: str) -> str:
     return (
@@ -126,6 +159,11 @@ async def list_new_orders(message: Message) -> None:
 async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
     if not _is_dispatcher_callback(callback):
         await callback.answer("Ruxsat yo'q", show_alert=True)
+        return
+
+    msg = _safe_message(callback)
+    if msg is None:
+        await callback.answer("Xabar eskirgan. Qayta harakat qiling.", show_alert=True)
         return
 
     if not callback.data:
@@ -192,7 +230,7 @@ async def cb_assign_order(callback: CallbackQuery, state: FSMContext) -> None:
         ])
 
     try:
-        await callback.message.edit_text(
+        await msg.edit_text(
             f"Buyurtma #{order_id} ga biriktirish uchun Masterlardan birini tanlang:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
         )
@@ -221,10 +259,10 @@ async def cb_select_master(callback: CallbackQuery) -> None:
     try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
-            
+
             master_user = await session.scalar(select(User).where(User.telegram_id == master_telegram_id))
             master_name = master_user.full_name if master_user and master_user.full_name else str(master_telegram_id)
-            
+
             # 1. Assign to dispatcher first (like before)
             order = await service.assign_order(order_id, dispatcher_telegram_id=dispatcher_telegram_id)
             # 2. Then assign master
@@ -237,11 +275,16 @@ async def cb_select_master(callback: CallbackQuery) -> None:
             await ns.notify_client_status_change(order, order.status)
             await ns.notify_master_new_assignment(order, master_telegram_id)
     except Exception as exc:
-        await callback.answer(str(exc), show_alert=True)
+        logger.exception("Failed to assign master for order #%s: %s", order_id, exc)
+        await callback.answer(str(exc)[:200], show_alert=True)
         return
 
-    if callback.message is not None:
-        await callback.message.edit_text(f"✅ Buyurtma #{order.id} 👨‍🔧 {master_name} ga muvaffaqiyatli biriktirildi.")
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text(f"✅ Buyurtma #{order.id} 👨‍🔧 {master_name} ga muvaffaqiyatli biriktirildi.")
+        except TelegramBadRequest:
+            pass
     await callback.answer()
 
 
@@ -279,16 +322,19 @@ async def cb_complete_order(callback: CallbackQuery) -> None:
             ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
     except Exception as exc:
-        await callback.answer(f"Xatolik: {exc}", show_alert=True)
+        logger.exception("Failed to complete order #%s: %s", order_id, exc)
+        await callback.answer(f"Xatolik: {exc}"[:200], show_alert=True)
         return
 
     amount_text = f"{order.final_amount:,.0f}" if order.final_amount else "—"
-    try:
-        await callback.message.edit_text(
-            f"✅ Buyurtma #{order.id} muvaffaqiyatli tasdiqlandi.\nSumma: {amount_text} so'm"
-        )
-    except TelegramBadRequest:
-        pass
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text(
+                f"✅ Buyurtma #{order.id} muvaffaqiyatli tasdiqlandi.\nSumma: {amount_text} so'm"
+            )
+        except TelegramBadRequest:
+            pass
     await callback.answer()
 
 
@@ -314,13 +360,16 @@ async def cb_cancel_order(callback: CallbackQuery) -> None:
             ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
     except Exception as exc:
-        await callback.answer(f"Xatolik: {exc}", show_alert=True)
+        logger.exception("Failed to cancel order #%s: %s", order_id, exc)
+        await callback.answer(f"Xatolik: {exc}"[:200], show_alert=True)
         return
 
-    try:
-        await callback.message.edit_text(f"🚫 Buyurtma #{order.id} bekor qilindi.")
-    except TelegramBadRequest:
-        pass
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text(f"🚫 Buyurtma #{order.id} bekor qilindi.")
+        except TelegramBadRequest:
+            pass
     await callback.answer()
 
 
@@ -496,7 +545,7 @@ async def cb_order_detail_inline(callback: CallbackQuery) -> None:
             service = OrderService(session)
             order = await service.get_order(order_id)
     except Exception as exc:
-        await callback.answer(str(exc), show_alert=True)
+        await callback.answer(str(exc)[:200], show_alert=True)
         return
 
     master_name = "—"
@@ -537,8 +586,10 @@ async def cb_order_detail_inline(callback: CallbackQuery) -> None:
         )])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-    try:
-        await callback.message.edit_text(text, reply_markup=kb)
-    except TelegramBadRequest:
-        pass
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text(text, reply_markup=kb)
+        except TelegramBadRequest:
+            pass
     await callback.answer()

@@ -1,14 +1,29 @@
 import logging
 import sys
 
-from pythonjsonlogger import jsonlogger
-
 
 def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
-    formatter = jsonlogger.JsonFormatter(
-        fmt="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+
+    try:
+        # python-json-logger >= 3.x uses a different import path
+        from pythonjsonlogger.json import JsonFormatter
+        formatter = JsonFormatter(
+            fmt="%(asctime)s %(levelname)s %(name)s %(message)s"
+        )
+    except ImportError:
+        try:
+            # python-json-logger 2.x
+            from pythonjsonlogger import jsonlogger
+            formatter = jsonlogger.JsonFormatter(
+                fmt="%(asctime)s %(levelname)s %(name)s %(message)s"
+            )
+        except ImportError:
+            # Fallback to standard formatting if python-json-logger is not installed
+            formatter = logging.Formatter(
+                fmt="%(asctime)s %(levelname)s %(name)s %(message)s"
+            )
+
     handler.setFormatter(formatter)
 
     root = logging.getLogger()

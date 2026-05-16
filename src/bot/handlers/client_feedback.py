@@ -1,10 +1,22 @@
+import logging
+
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 
 from src.db.session import AsyncSessionFactory
 from src.services.order_service import OrderService
 
 router = Router(name="client_feedback")
+logger = logging.getLogger(__name__)
+
+
+def _safe_message(callback: CallbackQuery) -> Message | None:
+    """Return the real Message object or None if the message is inaccessible."""
+    msg = callback.message
+    if msg is None or isinstance(msg, InaccessibleMessage):
+        return None
+    return msg
+
 
 @router.callback_query(F.data.startswith("client_rating:"))
 async def cb_client_rating(callback: CallbackQuery) -> None:
@@ -21,7 +33,7 @@ async def cb_client_rating(callback: CallbackQuery) -> None:
     if rating < 1 or rating > 5:
         await callback.answer("Baho 1 dan 5 gacha bo'lishi kerak.", show_alert=True)
         return
-    
+
     try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
@@ -35,11 +47,14 @@ async def cb_client_rating(callback: CallbackQuery) -> None:
             order.rating = rating
             await session.commit()
     except Exception as exc:
-        await callback.answer(f"Xatolik yuz berdi: {exc}", show_alert=True)
+        logger.exception("Rating failed for order #%s: %s", order_id, exc)
+        await callback.answer(f"Xatolik yuz berdi: {exc}"[:200], show_alert=True)
         return
-        
-    try:
-        await callback.message.edit_text(f"Sizning bahoingiz: {'⭐' * rating}\nFikr-mulohazangiz uchun rahmat!")
-    except Exception:
-        pass
+
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text(f"Sizning bahoingiz: {'⭐' * rating}\nFikr-mulohazangiz uchun rahmat!")
+        except Exception:
+            pass
     await callback.answer()

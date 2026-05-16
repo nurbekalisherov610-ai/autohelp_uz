@@ -1,33 +1,49 @@
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Union
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 
 class ThrottlingMiddleware(BaseMiddleware):
+    """Rate-limiter for messages and callback queries.
+
+    Messages use the full ``rate_limit``; callback queries (button presses)
+    use a much shorter cooldown so that inline-keyboard interactions feel
+    responsive and never get silently swallowed.
+    """
+
     def __init__(self, rate_limit: float = 1.0) -> None:
         self.rate_limit = rate_limit
-        self.caches: dict[int, float] = {}
+        self._msg_cache: dict[int, float] = {}
+        self._cb_cache: dict[int, float] = {}
 
     async def __call__(
         self,
-        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
-        event: Message,
+        handler: Callable[[Union[Message, CallbackQuery], dict[str, Any]], Awaitable[Any]],
+        event: Union[Message, CallbackQuery],
         data: dict[str, Any],
     ) -> Any:
-        if not hasattr(event, "from_user") or event.from_user is None:
+        # Determine the user behind this event
+        from_user = getattr(event, "from_user", None)
+        if from_user is None:
             return await handler(event, data)
 
-        user_id = event.from_user.id
+        user_id = from_user.id
         now = time.time()
-        
-        last_called = self.caches.get(user_id, 0.0)
-        
-        if (now - last_called) < self.rate_limit:
-            # Drop the event silently to avoid spamming the user
-            return None
-            
-        self.caches[user_id] = now
+
+        if isinstance(event, CallbackQuery):
+            # Very short cooldown for button taps (0.3 s) – just enough to
+            # prevent accidental double-taps but never block normal usage.
+            last = self._cb_cache.get(user_id, 0.0)
+            if (now - last) < 0.3:
+                return None
+            self._cb_cache[user_id] = now
+        else:
+            last = self._msg_cache.get(user_id, 0.0)
+            if (now - last) < self.rate_limit:
+                return None
+            self._msg_cache[user_id] = now
+
         return await handler(event, data)
