@@ -72,10 +72,24 @@ async def register_master(message: Message) -> None:
     # Determine valid secrets: master_secret env var, or fallback "master123"
     valid_secret = getattr(_settings, "master_secret", None) or "master123"
 
-    args = message.text.split() if message.text else []
-    if len(args) < 2 or args[1] != valid_secret:
-        await message.answer("Maxfiy kod xato. Format: /register_master <maxfiykod>")
-        return
+    # 1. Check if user is in MASTER_IDS list (auto-pass)
+    if _settings.master_ids:
+        m_ids = {int(x.strip()) for x in _settings.master_ids.split(",") if x.strip().lstrip("-").isdigit()}
+        if message.from_user.id in m_ids:
+            # Skip secret check
+            pass
+        else:
+            # 2. Otherwise check secret code
+            args = message.text.split() if message.text else []
+            if len(args) < 2 or args[1] != valid_secret:
+                await message.answer("Maxfiy kod xato. Format: /register_master <maxfiykod>")
+                return
+    else:
+        # 2. Check secret code if no MASTER_IDS configured
+        args = message.text.split() if message.text else []
+        if len(args) < 2 or args[1] != valid_secret:
+            await message.answer("Maxfiy kod xato. Format: /register_master <maxfiykod>")
+            return
 
     from sqlalchemy import select
 
