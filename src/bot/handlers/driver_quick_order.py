@@ -152,17 +152,7 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     try:
-        await state.clear()
-        await state.update_data(language=language)
-
-        msg = _safe_message(callback)
-        if msg is not None:
-            try:
-                await msg.edit_text(_t(language, "welcome"))
-            except Exception:
-                pass
-            await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
-
+        # 1. Database work FIRST. If this fails, we show the alert and STOP.
         if callback.from_user is not None:
             async with AsyncSessionFactory() as session:
                 user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
@@ -178,8 +168,23 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
                     if callback.from_user.full_name:
                         user.full_name = callback.from_user.full_name
                 await session.commit()
-    except Exception:
-        logger.exception("Error in choose_language")
+
+        # 2. State work
+        await state.clear()
+        await state.update_data(language=language)
+
+        # 3. UI work (only happens if DB was successful)
+        msg = _safe_message(callback)
+        if msg is not None:
+            try:
+                await msg.edit_text(_t(language, "welcome"))
+            except Exception:
+                pass
+            await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
+
+    except Exception as exc:
+        logger.exception("CRITICAL: choose_language DB error: %s", exc)
+        # This alert matches the screenshot. It happens if the database is down or tables are missing.
         await callback.answer("Texnik xatolik yuz berdi.", show_alert=True)
         return
 
@@ -377,8 +382,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
             await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
         
     except Exception as exc:
-        logger.exception("CRITICAL: confirm_order failed for user %s: %s", 
-                         callback.from_user.id if callback.from_user else "unknown", exc)
+        logger.exception("CRITICAL: confirm_order failed: %s", exc)
         if msg:
             try:
                 # Restore original text with a clear error hint so user knows it failed
