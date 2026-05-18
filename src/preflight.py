@@ -47,8 +47,8 @@ async def check_database(settings):
             
             # Define required columns for core functionality
             required = {
-                "users": ["id", "telegram_id", "language", "is_master"],
-                "orders": ["id", "client_id", "status", "issue_label", "phone", "video_file_id"],
+                "users": ["id", "telegram_id", "language", "is_master", "is_blocked"],
+                "orders": ["id", "client_id", "status", "issue_type", "issue_label", "phone", "video_file_id"],
                 "order_status_history": ["order_id", "to_status"]
             }
             

@@ -111,9 +111,8 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
             await session.commit()
     except Exception as exc:
         logger.exception("DATABASE ERROR in choose_language for user %s: %s", callback.from_user.id, exc)
-        err_msg = str(exc.orig) if hasattr(exc, "orig") else str(exc)
-        await callback.message.answer(f"⚠️ DB Xatosi haqida batafsil ma'lumot:\n\n`{err_msg}`", parse_mode="Markdown")
-        raise exc
+        await callback.answer("Texnik xatolik. Iltimos, qayta urinib ko'ring.", show_alert=True)
+        return
     
     await state.clear()
     await state.update_data(language=language)
@@ -249,5 +248,6 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
             await msg.answer(_t(lang, "main_menu"), reply_markup=start_keyboard(lang))
     except Exception as exc:
         logger.exception("Confirm order error: %s", exc)
-        await callback.answer("Texnik xatolik.", show_alert=True)
+        await callback.answer("Texnik xatolik. Iltimos, qayta urinib ko'ring.", show_alert=True)
+        return
     await callback.answer()

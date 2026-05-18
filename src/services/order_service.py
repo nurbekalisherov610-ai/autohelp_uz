@@ -10,6 +10,7 @@ from src.db.models.order import Order, OrderStatusHistory
 from src.db.models.user import User
 
 ISSUE_LABEL_TO_TYPE: dict[str, IssueType] = {
+    # Without emojis (fallback / manual)
     "Zavod bo'lmayapti": IssueType.ENGINE_NOT_STARTING,
     "Не заводится": IssueType.ENGINE_NOT_STARTING,
     "Akkumulyator o'tirgan": IssueType.BATTERY_DOWN,
@@ -18,6 +19,15 @@ ISSUE_LABEL_TO_TYPE: dict[str, IssueType] = {
     "Пробито колесо": IssueType.FLAT_TIRE,
     "Boshqa muammo": IssueType.OTHER,
     "Другая проблема": IssueType.OTHER,
+    # With emojis (from keyboard buttons)
+    "🛠 Zavod bo'lmayapti": IssueType.ENGINE_NOT_STARTING,
+    "🛠 Не заводится": IssueType.ENGINE_NOT_STARTING,
+    "🔋 Akkumulyator o'tirgan": IssueType.BATTERY_DOWN,
+    "🔋 Сел аккумулятор": IssueType.BATTERY_DOWN,
+    "🎈 Balon yorilgan": IssueType.FLAT_TIRE,
+    "🎈 Пробито колесо": IssueType.FLAT_TIRE,
+    "❓ Boshqa muammo": IssueType.OTHER,
+    "❓ Другая проблема": IssueType.OTHER,
 }
 
 MASTER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {

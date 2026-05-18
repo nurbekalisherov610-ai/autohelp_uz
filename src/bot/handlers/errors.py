@@ -24,21 +24,11 @@ async def global_error_handler(event: ErrorEvent) -> bool:
         exc,
     )
 
-    # 2. Extract error details for admin notification
-    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    error_report = (
-        f"🚨 **UNHANDLED BOT ERROR**\n\n"
-        f"Update ID: `{update.update_id}`\n"
-        f"Error: `{str(exc)}`\n\n"
-        f"Traceback:\n```\n{tb[:3000]}\n```"
-    )
-
-    # 3. Notify the user
+    # 2. Notify the user with a simple, clean message
     try:
         if update.message:
             await update.message.answer(
-                "Texnik xatolik yuz berdi. Iltimos, 1-2 daqiqadan keyin qayta urinib ko'ring.\n"
-                "Dispecherlarga xabar yuborildi."
+                "Texnik xatolik yuz berdi. Iltimos, 1-2 daqiqadan keyin qayta urinib ko'ring."
             )
         elif update.callback_query:
             await update.callback_query.answer(
@@ -48,17 +38,22 @@ async def global_error_handler(event: ErrorEvent) -> bool:
     except Exception:
         pass
 
-    # 4. Notify Admins if configured
+    # 3. Notify Admins if configured
     try:
         admin_ids = settings.parsed_admin_ids
         if admin_ids:
             bot = update.get_bot()
             if bot:
-                # Notify the first admin as a primary alert
+                tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+                error_report = (
+                    f"🚨 UNHANDLED BOT ERROR\n\n"
+                    f"Update ID: {update.update_id}\n"
+                    f"Error: {exc}\n\n"
+                    f"Traceback:\n{tb[:3000]}"
+                )
                 await bot.send_message(
                     chat_id=admin_ids[0],
                     text=error_report,
-                    parse_mode="Markdown"
                 )
     except Exception as notify_exc:
         logger.error("Failed to notify admins about error: %s", notify_exc)
