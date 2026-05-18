@@ -2,6 +2,7 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,13 @@ def _parse_int_list(value: str | None) -> list[int]:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("dispatcher_chat_id", "dispatcher_group_id", "admin_chat_id", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, v: Any) -> Any:
+        if v == "":
+            return None
+        return v
 
     app_name: str = "AutoHelp"
     app_env: str = "dev"
