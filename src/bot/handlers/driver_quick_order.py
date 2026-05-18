@@ -111,9 +111,8 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
             await session.commit()
     except Exception as exc:
         logger.exception("DATABASE ERROR in choose_language for user %s: %s", callback.from_user.id, exc)
-        # Re-raise so global error handler can notify admin, but provide immediate answer to user
-        error_msg = f"DB Xatosi: {type(exc).__name__} - {str(exc)[:50]}"
-        await callback.answer(error_msg, show_alert=True)
+        err_msg = str(exc.orig) if hasattr(exc, "orig") else str(exc)
+        await callback.message.answer(f"⚠️ DB Xatosi haqida batafsil ma'lumot:\n\n`{err_msg}`", parse_mode="Markdown")
         raise exc
     
     await state.clear()
