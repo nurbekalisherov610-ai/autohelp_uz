@@ -36,10 +36,11 @@ async def init_db(async_engine: AsyncEngine | None = None) -> None:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("create_all() completed.")
 
-    # Step 2: Heal existing tables on PostgreSQL only
+    # Step 2: Heal existing tables
     _dsn = settings.resolved_database_dsn
     if "sqlite" in _dsn:
-        logger.info("SQLite detected — schema healing not needed.")
+        logger.info("SQLite detected — running SQLite schema healing…")
+        await _heal_sqlite_db(resolved_engine)
         return
 
     logger.info("Running PostgreSQL schema healing…")
@@ -47,6 +48,46 @@ async def init_db(async_engine: AsyncEngine | None = None) -> None:
     await _heal_orders_table(resolved_engine)
     await _heal_order_status_history_table(resolved_engine)
     logger.info("Schema healing complete.")
+
+
+async def _heal_sqlite_db(engine_: AsyncEngine) -> None:
+    await _run_safe_sql(
+        engine_,
+        [
+            # Users Table
+            "ALTER TABLE users ADD COLUMN is_master BOOLEAN DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN is_blocked BOOLEAN DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN created_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN updated_at TIMESTAMP",
+            
+            # Orders Table
+            "ALTER TABLE orders ADD COLUMN client_id INTEGER",
+            "ALTER TABLE orders ADD COLUMN issue_type VARCHAR(32)",
+            "ALTER TABLE orders ADD COLUMN issue_label VARCHAR(100)",
+            "ALTER TABLE orders ADD COLUMN phone VARCHAR(32)",
+            "ALTER TABLE orders ADD COLUMN latitude FLOAT",
+            "ALTER TABLE orders ADD COLUMN longitude FLOAT",
+            "ALTER TABLE orders ADD COLUMN status VARCHAR(32)",
+            "ALTER TABLE orders ADD COLUMN assigned_dispatcher_telegram_id BIGINT",
+            "ALTER TABLE orders ADD COLUMN assigned_master_telegram_id BIGINT",
+            "ALTER TABLE orders ADD COLUMN final_amount NUMERIC(12, 2)",
+            "ALTER TABLE orders ADD COLUMN video_file_id VARCHAR(255)",
+            "ALTER TABLE orders ADD COLUMN rating INTEGER",
+            "ALTER TABLE orders ADD COLUMN feedback_text VARCHAR(1000)",
+            "ALTER TABLE orders ADD COLUMN shortcomings VARCHAR(1000)",
+            "ALTER TABLE orders ADD COLUMN completed_at TIMESTAMP",
+            "ALTER TABLE orders ADD COLUMN created_at TIMESTAMP",
+            "ALTER TABLE orders ADD COLUMN updated_at TIMESTAMP",
+
+            # Order Status History Table
+            "ALTER TABLE order_status_history ADD COLUMN order_id INTEGER",
+            "ALTER TABLE order_status_history ADD COLUMN from_status VARCHAR(32)",
+            "ALTER TABLE order_status_history ADD COLUMN to_status VARCHAR(32)",
+            "ALTER TABLE order_status_history ADD COLUMN actor_telegram_id BIGINT",
+            "ALTER TABLE order_status_history ADD COLUMN created_at TIMESTAMP",
+            "ALTER TABLE order_status_history ADD COLUMN updated_at TIMESTAMP",
+        ],
+    )
 
 
 async def _run_safe_sql(engine_: AsyncEngine, statements: list[str]) -> None:
