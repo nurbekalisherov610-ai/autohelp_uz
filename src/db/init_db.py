@@ -31,11 +31,17 @@ async def init_db(async_engine: AsyncEngine | None = None) -> None:
         try:
             # Ensure is_master exists
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_master BOOLEAN DEFAULT FALSE"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
         except Exception:
             pass
             
         try:
             # Ensure missing orders columns exist
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS issue_type VARCHAR(32)"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS status VARCHAR(32)"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS final_amount NUMERIC(12, 2)"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE"))
             await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS video_file_id VARCHAR(255)"))
             await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rating INTEGER"))
             await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_id INTEGER"))
@@ -45,6 +51,8 @@ async def init_db(async_engine: AsyncEngine | None = None) -> None:
             await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS issue_label VARCHAR(100)"))
             await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_dispatcher_telegram_id BIGINT"))
             await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_master_telegram_id BIGINT"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
         except Exception:
             pass
             
@@ -52,5 +60,7 @@ async def init_db(async_engine: AsyncEngine | None = None) -> None:
             # Ensure missing order_status_history columns exist
             await conn.execute(text("ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS from_status VARCHAR(32)"))
             await conn.execute(text("ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS to_status VARCHAR(32)"))
+            await conn.execute(text("ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+            await conn.execute(text("ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
         except Exception:
             pass
