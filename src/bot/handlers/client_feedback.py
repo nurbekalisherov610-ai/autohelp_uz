@@ -18,8 +18,13 @@ def _safe_message(callback: CallbackQuery) -> Message | None:
     return msg
 
 
+from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from src.bot.states.feedback import ClientFeedbackState
+
 @router.callback_query(F.data.startswith("client_rating:"))
-async def cb_client_rating(callback: CallbackQuery) -> None:
+async def cb_client_rating(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.data:
         await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
@@ -54,7 +59,79 @@ async def cb_client_rating(callback: CallbackQuery) -> None:
     msg = _safe_message(callback)
     if msg is not None:
         try:
-            await msg.edit_text(f"Sizning bahoingiz: {'⭐' * rating}\nFikr-mulohazangiz uchun rahmat!")
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="O'tkazib yuborish / Пропустить", callback_data=f"skip_feedback:{order_id}")]])
+            await msg.edit_text(f"Sizning bahoingiz: {'⭐' * rating}\n\nXizmat haqida qo'shimcha fikrlaringiz bo'lsa yozib qoldiring (yoki o'tkazib yuboring):", reply_markup=kb)
+        except Exception:
+            pass
+    await state.update_data(feedback_order_id=order_id)
+    await state.set_state(ClientFeedbackState.waiting_for_text)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("skip_feedback:"))
+async def cb_skip_feedback(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        order_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        order_id = None
+    
+    await state.clear()
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text("Fikr-mulohazangiz uchun rahmat! / Спасибо за ваш отзыв!")
         except Exception:
             pass
     await callback.answer()
+
+@router.callback_query(F.data.startswith("skip_shortcomings:"))
+async def cb_skip_shortcomings(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    msg = _safe_message(callback)
+    if msg is not None:
+        try:
+            await msg.edit_text("Fikr-mulohazangiz uchun rahmat! / Спасибо за ваш отзыв!")
+        except Exception:
+            pass
+    await callback.answer()
+
+@router.message(ClientFeedbackState.waiting_for_text)
+async def process_feedback_text(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    order_id = data.get("feedback_order_id")
+    if not order_id:
+        await state.clear()
+        return
+
+    try:
+        async with AsyncSessionFactory() as session:
+            service = OrderService(session)
+            order = await service.get_order(order_id)
+            order.feedback_text = message.text
+            await session.commit()
+    except Exception as exc:
+        logger.exception("Feedback text save failed for order #%s: %s", order_id, exc)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="O'tkazib yuborish / Пропустить", callback_data=f"skip_shortcomings:{order_id}")]])
+    await message.answer("Kamchiliklar yoki shikoyatlaringiz bo'lsa, ularni ham yozib qoldiring:", reply_markup=kb)
+    await state.set_state(ClientFeedbackState.waiting_for_shortcomings)
+
+@router.message(ClientFeedbackState.waiting_for_shortcomings)
+async def process_feedback_shortcomings(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    order_id = data.get("feedback_order_id")
+    if not order_id:
+        await state.clear()
+        return
+
+    try:
+        async with AsyncSessionFactory() as session:
+            service = OrderService(session)
+            order = await service.get_order(order_id)
+            order.shortcomings = message.text
+            await session.commit()
+    except Exception as exc:
+        logger.exception("Feedback shortcomings save failed for order #%s: %s", order_id, exc)
+
+    await state.clear()
+    await message.answer("Barchasi qabul qilindi. Fikr-mulohazangiz uchun rahmat! / Спасибо за ваш отзыв!")
+

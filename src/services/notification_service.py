@@ -142,6 +142,8 @@ class NotificationService:
             except Exception as exc:
                 logger.error("Failed to broadcast new order to %s: %s", target_id, exc)
 
+    _background_tasks = set()
+
     async def notify_client_order_created(self, order: Order) -> None:
         if not order.client or not order.client.telegram_id:
             logger.warning("Order #%s has no client object loaded for notification.", order.id)
@@ -158,7 +160,9 @@ class NotificationService:
             logger.error("Failed to send text confirmation to %s: %s", client_id, exc)
 
         # 2. Schedule confirmation video/note after 10 seconds in a background task
-        asyncio.create_task(self._delayed_video_note(client_id, language))
+        task = asyncio.create_task(self._delayed_video_note(client_id, language))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def _delayed_video_note(self, chat_id: int, language: str) -> None:
         """Wait 10 seconds and then send the video note."""

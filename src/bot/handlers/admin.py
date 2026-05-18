@@ -161,3 +161,74 @@ async def cmd_admin_masters(message: Message) -> None:
         lines.append(f"• {m.full_name or 'Nomsiz'} | ID: {m.telegram_id} | {status}")
 
     await message.answer("\n".join(lines))
+
+from aiogram import F
+from aiogram.types import BufferedInputFile
+from src.services.export_service import ExportImportService
+
+@router.message(Command("export_orders"))
+async def cmd_export_orders(message: Message) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await message.answer("⛔ Sizda bu buyruqdan foydalanish huquqi yo'q.")
+        return
+
+    msg = await message.answer("⏳ Eksport qilinmoqda...")
+    async with AsyncSessionFactory() as session:
+        service = ExportImportService(session)
+        data = await service.export_orders()
+    
+    file = BufferedInputFile(data, filename="orders.xlsx")
+    await message.answer_document(document=file, caption="📦 Buyurtmalar ro'yxati")
+    await msg.delete()
+
+@router.message(Command("export_users"))
+async def cmd_export_users(message: Message) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await message.answer("⛔ Sizda bu buyruqdan foydalanish huquqi yo'q.")
+        return
+
+    msg = await message.answer("⏳ Eksport qilinmoqda...")
+    async with AsyncSessionFactory() as session:
+        service = ExportImportService(session)
+        data = await service.export_users()
+    
+    file = BufferedInputFile(data, filename="users.xlsx")
+    await message.answer_document(document=file, caption="👥 Foydalanuvchilar ro'yxati")
+    await msg.delete()
+
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+
+class AdminImportState(StatesGroup):
+    waiting_for_file = State()
+
+@router.message(Command("import_users"))
+async def cmd_import_users(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await message.answer("⛔ Sizda bu buyruqdan foydalanish huquqi yo'q.")
+        return
+    
+    await state.set_state(AdminImportState.waiting_for_file)
+    await message.answer("Iltimos, foydalanuvchilar ro'yxati kiritilgan Excel (.xlsx) faylini yuboring.\nBekor qilish uchun /cancel tugmasini bosing.")
+
+@router.message(AdminImportState.waiting_for_file, F.document)
+async def process_import_users_file(message: Message, state: FSMContext) -> None:
+    if message.document is None or not message.document.file_name.endswith('.xlsx'):
+        await message.answer("Iltimos, faqat .xlsx formatidagi Excel faylini yuboring.")
+        return
+        
+    msg = await message.answer("⏳ Fayl yuklanmoqda va qayta ishlanmoqda...")
+    
+    try:
+        file = await message.bot.get_file(message.document.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        
+        async with AsyncSessionFactory() as session:
+            service = ExportImportService(session)
+            imported, updated = await service.import_users(file_bytes.read())
+            
+        await msg.edit_text(f"✅ Muvaffaqiyatli yakunlandi!\n\nYangi qo'shildi: {imported}\nYangilandi: {updated}")
+    except Exception as exc:
+        await msg.edit_text(f"❌ Xatolik yuz berdi: {exc}")
+    
+    await state.clear()

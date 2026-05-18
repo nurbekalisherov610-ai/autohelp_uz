@@ -37,6 +37,8 @@ class Order(Base, TimestampMixin):
     final_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     video_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     rating: Mapped[int | None] = mapped_column(nullable=True)
+    feedback_text: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    shortcomings: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     client = relationship("User", back_populates="orders", lazy="joined")

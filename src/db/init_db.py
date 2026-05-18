@@ -77,6 +77,8 @@ async def _heal_orders_table(engine_: AsyncEngine) -> None:
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS final_amount NUMERIC(12, 2)",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS video_file_id VARCHAR(255)",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS rating INTEGER",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS feedback_text VARCHAR(1000)",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS shortcomings VARCHAR(1000)",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
