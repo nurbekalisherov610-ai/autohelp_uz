@@ -22,12 +22,14 @@ def _has_column(table_name: str, column_name: str) -> bool:
     return any(column["name"] == column_name for column in inspector.get_columns(table_name))
 
 def upgrade() -> None:
-    # 1. Fix NOT NULL violation on 'users' table
-    # Many legacy databases have 'phone' or 'full_name' as NOT NULL, 
-    # but we need to create users before we have their phone.
-    op.execute("ALTER TABLE users ALTER COLUMN phone DROP NOT NULL")
-    op.execute("ALTER TABLE users ALTER COLUMN full_name DROP NOT NULL")
-    op.execute("ALTER TABLE users ALTER COLUMN language DROP NOT NULL")
+    conn = op.get_bind()
+    if conn.dialect.name == "postgresql":
+        # 1. Fix NOT NULL violation on 'users' table
+        # Many legacy databases have 'phone' or 'full_name' as NOT NULL, 
+        # but we need to create users before we have their phone.
+        op.execute("ALTER TABLE users ALTER COLUMN phone DROP NOT NULL")
+        op.execute("ALTER TABLE users ALTER COLUMN full_name DROP NOT NULL")
+        op.execute("ALTER TABLE users ALTER COLUMN language DROP NOT NULL")
 
     # 2. Heal 'orders' table for missing columns reported in preflight
     if not _has_column("orders", "issue_label"):

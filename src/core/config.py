@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     backup_retention_days: int = 30
     
     # Internal
-    auto_create_schema: bool = False
+    auto_create_schema: bool = True
     dependency_wait_attempts: int = 30
     dependency_wait_delay_seconds: float = 2.0
 
