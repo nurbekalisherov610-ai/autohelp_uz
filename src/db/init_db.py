@@ -17,3 +17,40 @@ async def init_db(async_engine: AsyncEngine | None = None) -> None:
     resolved_engine = async_engine or engine
     async with resolved_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+        # --- AUTO HEALING FOR EXISTING BROKEN SCHEMAS ON RAILWAY ---
+        from sqlalchemy import text
+        try:
+            # Drop NOT NULL constraints if they exist
+            await conn.execute(text("ALTER TABLE users ALTER COLUMN phone DROP NOT NULL"))
+            await conn.execute(text("ALTER TABLE users ALTER COLUMN full_name DROP NOT NULL"))
+            await conn.execute(text("ALTER TABLE users ALTER COLUMN language DROP NOT NULL"))
+        except Exception:
+            pass  # Ignore if using sqlite or table doesn't exist
+            
+        try:
+            # Ensure is_master exists
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_master BOOLEAN DEFAULT FALSE"))
+        except Exception:
+            pass
+            
+        try:
+            # Ensure missing orders columns exist
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS video_file_id VARCHAR(255)"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rating INTEGER"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_id INTEGER"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone VARCHAR(32)"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS latitude FLOAT"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS longitude FLOAT"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS issue_label VARCHAR(100)"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_dispatcher_telegram_id BIGINT"))
+            await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_master_telegram_id BIGINT"))
+        except Exception:
+            pass
+            
+        try:
+            # Ensure missing order_status_history columns exist
+            await conn.execute(text("ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS from_status VARCHAR(32)"))
+            await conn.execute(text("ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS to_status VARCHAR(32)"))
+        except Exception:
+            pass
