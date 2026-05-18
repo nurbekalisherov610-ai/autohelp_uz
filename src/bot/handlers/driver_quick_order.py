@@ -240,7 +240,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
             order = await service.create_driver_order(DriverOrderPayload(client_telegram_id=callback.from_user.id, full_name=callback.from_user.full_name, language=lang, phone=data["phone"], issue_label=data["issue"], latitude=float(data["latitude"]), longitude=float(data["longitude"])))
             ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_new_order(order_id=order.id, client_telegram_id=callback.from_user.id, phone=data["phone"], issue=data["issue"], latitude=float(data["latitude"]), longitude=float(data["longitude"]))
-            await ns.notify_client_order_created(order)
+            await ns.notify_client_order_created(order_id=order.id, client_telegram_id=callback.from_user.id, language=lang)
         
         await state.clear()
         await state.update_data(language=lang)

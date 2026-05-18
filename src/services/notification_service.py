@@ -144,23 +144,18 @@ class NotificationService:
 
     _background_tasks = set()
 
-    async def notify_client_order_created(self, order: Order) -> None:
-        if not order.client or not order.client.telegram_id:
-            logger.warning("Order #%s has no client object loaded for notification.", order.id)
-            return
-
-        client_id = order.client.telegram_id
-        language = normalize_language(order.client.language)
+    async def notify_client_order_created(self, order_id: int, client_telegram_id: int, language: str | None) -> None:
+        language = normalize_language(language)
         
         # 1. Send text confirmation immediately
         try:
-            text = CLIENT_TEXT["created"][language].format(order_id=order.id)
-            await self.bot.send_message(chat_id=client_id, text=text)
+            text = CLIENT_TEXT["created"][language].format(order_id=order_id)
+            await self.bot.send_message(chat_id=client_telegram_id, text=text)
         except Exception as exc:
-            logger.error("Failed to send text confirmation to %s: %s", client_id, exc)
+            logger.error("Failed to send text confirmation to %s: %s", client_telegram_id, exc)
 
         # 2. Schedule confirmation video/note after 10 seconds in a background task
-        task = asyncio.create_task(self._delayed_video_note(client_id, language))
+        task = asyncio.create_task(self._delayed_video_note(client_telegram_id, language))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
