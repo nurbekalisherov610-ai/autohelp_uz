@@ -1,3 +1,10 @@
+"""
+NotificationService — all outbound bot messages.
+
+IMPORTANT: Order relationships use lazy='raise'. 
+This service receives scalar data explicitly (telegram_id, language, etc.)
+rather than accessing order.client or order.status_history.
+"""
 import asyncio
 import logging
 
@@ -11,47 +18,48 @@ from src.db.models.order import Order
 
 logger = logging.getLogger(__name__)
 
-# ── Client-facing text ──────────────────────────────────────────────────────
+# ── Client-facing text ────────────────────────────────────────────────────────
 
-CLIENT_TEXT: dict[str, dict[str, str]] = {
-    "created": {
-        "uz": "✅ Buyurtmangiz qabul qilindi. Dispecher #{order_id} raqamli buyurtmangizni ko'rib chiqmoqda.",
-        "ru": "✅ Ваша заявка #{order_id} принята. Диспетчер уже проверяет её.",
-    },
+_CLIENT_TEXT: dict[str, dict[str, str]] = {
     "assigned": {
-        "uz": "📋 Buyurtma #{order_id}: Usta tayinlandi, tez orada siz bilan bog'lanadi.",
-        "ru": "📋 Заявка #{order_id}: Мастер назначен, скоро свяжется с вами.",
+        "uz": "📋 Buyurtma #{id}: Usta tayinlandi, tez orada siz bilan bog'lanadi.",
+        "ru": "📋 Заявка #{id}: Мастер назначен, скоро свяжется с вами.",
     },
     "accepted": {
-        "uz": "🤝 Buyurtma #{order_id}: Usta tayyor — yo'lga chiqqanini kutib turing.",
-        "ru": "🤝 Заявка #{order_id}: Мастер принял заказ — ожидайте выезда.",
+        "uz": "🤝 Buyurtma #{id}: Usta qabul qildi — yo'lga chiqqanini kutib turing.",
+        "ru": "🤝 Заявка #{id}: Мастер принял заказ — ожидайте выезда.",
     },
     "on_the_way": {
-        "uz": "🚗 Buyurtma #{order_id}: Usta yo'lda! Yaqin orada yetib keladi.",
-        "ru": "🚗 Заявка #{order_id}: Мастер едет! Ожидайте скорого прибытия.",
+        "uz": "🚗 Buyurtma #{id}: Usta yo'lda!",
+        "ru": "🚗 Заявка #{id}: Мастер едет к вам!",
     },
     "arrived": {
-        "uz": "📍 Buyurtma #{order_id}: Usta manzilingizga yetib keldi!",
-        "ru": "📍 Заявка #{order_id}: Мастер прибыл на место!",
+        "uz": "📍 Buyurtma #{id}: Usta manzilingizga yetib keldi!",
+        "ru": "📍 Заявка #{id}: Мастер прибыл на место!",
     },
     "in_progress": {
-        "uz": "🛠 Buyurtma #{order_id}: Usta ta'mirlashni boshladi.",
-        "ru": "🛠 Заявка #{order_id}: Мастер приступил к работе.",
+        "uz": "🛠 Buyurtma #{id}: Usta ta'mirlashni boshladi.",
+        "ru": "🛠 Заявка #{id}: Мастер приступил к работе.",
     },
     "cancelled": {
-        "uz": "🚫 Buyurtma #{order_id} bekor qilindi. Savol bo'lsa, bog'laning.",
-        "ru": "🚫 Заявка #{order_id} отменена. Если есть вопросы — свяжитесь с нами.",
+        "uz": "🚫 Buyurtma #{id} bekor qilindi.",
+        "ru": "🚫 Заявка #{id} отменена.",
     },
     "completed": {
-        "uz": "🎉 Buyurtma #{order_id} muvaffaqiyatli yakunlandi! Xizmatimizdan mamnunmisiz? Iltimos, baho bering:",
-        "ru": "🎉 Заявка #{order_id} успешно завершена! Как вам наш сервис? Пожалуйста, оцените:",
+        "uz": "🎉 Buyurtma #{id} yakunlandi! Xizmatga baho bering:",
+        "ru": "🎉 Заявка #{id} завершена! Оцените наш сервис:",
     },
 }
 
-
-def _client_text(order: Order, key: str) -> str:
-    language = normalize_language(order.client.language if order.client else None)
-    return CLIENT_TEXT[key][language].format(order_id=order.id)
+_STATUS_TO_KEY = {
+    OrderStatus.ASSIGNED: "assigned",
+    OrderStatus.ACCEPTED: "accepted",
+    OrderStatus.ON_THE_WAY: "on_the_way",
+    OrderStatus.ARRIVED: "arrived",
+    OrderStatus.IN_PROGRESS: "in_progress",
+    OrderStatus.CANCELLED: "cancelled",
+    OrderStatus.COMPLETED: "completed",
+}
 
 
 class NotificationService:
@@ -63,13 +71,24 @@ class NotificationService:
         self.bot = bot
         self.settings = settings
 
-    # ── Video note ──────────────────────────────────────────────────────────
+    # ── Broadcast targets ─────────────────────────────────────────────────────
 
-    async def _send_confirmation_video(self, chat_id: int, language: str | None) -> None:
-        """Send the configured confirmation video/note to the client."""
+    def _broadcast_targets(self) -> set[int]:
+        targets: set[int] = set()
+        main = self.settings.resolved_dispatcher_chat_id
+        if main:
+            targets.add(main)
+        targets.update(self.settings.parsed_dispatcher_ids)
+        targets.update(self.settings.parsed_admin_ids)
+        return {t for t in targets if t and t not in PLACEHOLDER_CHAT_IDS}
+
+    # ── Video note ────────────────────────────────────────────────────────────
+
+    async def _send_confirmation_video(self, chat_id: int, language: str) -> None:
+        """Send language-specific confirmation video note to client."""
         file_id = self.settings.confirmation_video_file_id(language)
         if not file_id:
-            logger.debug("No confirmation video configured for lang=%s, skipping.", language)
+            logger.debug("No confirmation video configured for lang=%s", language)
             return
 
         kind = (self.settings.dispatcher_confirm_video_kind or "video_note").strip().lower()
@@ -78,124 +97,121 @@ class NotificationService:
                 await self.bot.send_video(chat_id=chat_id, video=file_id)
             else:
                 await self.bot.send_video_note(chat_id=chat_id, video_note=file_id)
-            logger.info("Sent confirmation video (kind=%s) to %s", kind, chat_id)
+            logger.info("Sent confirmation %s to %s", kind, chat_id)
         except Exception as exc:
-            logger.warning(
-                "Failed to send %s to %s: %s — trying fallback.", kind, chat_id, exc
-            )
+            logger.warning("Failed %s to %s: %s — trying fallback", kind, chat_id, exc)
             try:
-                # Absolute fallback: try the other type
                 if kind in {"video", "regular_video"}:
                     await self.bot.send_video_note(chat_id=chat_id, video_note=file_id)
                 else:
                     await self.bot.send_video(chat_id=chat_id, video=file_id)
             except Exception as exc2:
-                logger.error("Final video send failure for %s: %s", chat_id, exc2)
+                logger.error("Fallback video also failed for %s: %s", chat_id, exc2)
 
-    # ── Broadcast targets ───────────────────────────────────────────────────
-
-    def _broadcast_targets(self) -> set[int]:
-        """Collect all relevant chat IDs for dispatcher/admin notifications."""
-        targets: set[int] = set()
-
-        # 1. Resolved dispatcher group/chat
-        main = self.settings.resolved_dispatcher_chat_id
-        if main:
-            targets.add(main)
-
-        # 2. Individual dispatcher IDs
-        targets.update(self.settings.parsed_dispatcher_ids)
-
-        # 3. Individual admin IDs (superadmins see everything)
-        targets.update(self.settings.parsed_admin_ids)
-
-        # Remove any placeholder or zero values
-        return {t for t in targets if t and t not in PLACEHOLDER_CHAT_IDS}
-
-    # ── Client notifications ────────────────────────────────────────────────
+    # ── Client notifications ──────────────────────────────────────────────────
 
     async def notify_client_order_created(
-        self, order_id: int, client_telegram_id: int, language: str | None
+        self,
+        *,
+        order_id: int,
+        client_telegram_id: int,
+        language: str | None,
     ) -> None:
         """
-        1. Send immediate text confirmation to client.
-        2. Schedule a delayed video note (10 seconds later) as a background task.
+        Immediately send text confirmation, then send video note after 10 seconds
+        in a background task (non-blocking).
         """
-        language = normalize_language(language)
+        lang = normalize_language(language)
 
-        # Immediate text
+        # Immediate text confirmation
         try:
-            text = CLIENT_TEXT["created"][language].format(order_id=order_id)
-            await self.bot.send_message(chat_id=client_telegram_id, text=text)
+            await self.bot.send_message(
+                chat_id=client_telegram_id,
+                text=(
+                    f"✅ <b>Buyurtma #{order_id} qabul qilindi!</b>\n\n"
+                    "Dispecher tez orada siz bilan bog'lanadi. 🙏"
+                    if lang == "uz" else
+                    f"✅ <b>Заявка #{order_id} принята!</b>\n\n"
+                    "Диспетчер скоро свяжется с вами. 🙏"
+                ),
+                parse_mode="HTML",
+            )
         except Exception as exc:
-            logger.error("Failed to send text confirmation to %s: %s", client_telegram_id, exc)
+            logger.error("Failed to send confirmation text to %s: %s", client_telegram_id, exc)
 
-        # Delayed video in background (non-blocking)
+        # Delayed video note — background task, never blocks the handler
         task = asyncio.create_task(
-            self._delayed_video(client_telegram_id, language)
+            self._delayed_video(client_telegram_id, lang)
         )
         NotificationService._background_tasks.add(task)
         task.add_done_callback(NotificationService._background_tasks.discard)
 
     async def _delayed_video(self, chat_id: int, language: str) -> None:
-        """Wait 10 s then send the pre-configured confirmation video note."""
         await asyncio.sleep(10)
-        try:
-            await self._send_confirmation_video(chat_id, language)
-        except Exception as exc:
-            logger.error("Delayed video failed for %s: %s", chat_id, exc)
+        await self._send_confirmation_video(chat_id, language)
 
-    async def notify_client_status_change(self, order: Order, status: OrderStatus) -> None:
-        """Notify client of any order status change (except NEW → creation handled separately)."""
-        if not order.client or not order.client.telegram_id:
-            logger.warning(
-                "Order #%s has no client telegram_id, skipping status notification.",
-                order.id,
-            )
+    async def notify_client_status_change(
+        self,
+        *,
+        order_id: int,
+        client_telegram_id: int,
+        client_language: str | None,
+        status: OrderStatus,
+    ) -> None:
+        """
+        Notify client of a status change.
+        NOTE: Accepts scalar values directly — does NOT touch order.client relationship.
+        """
+        if not client_telegram_id:
             return
 
-        client_id = order.client.telegram_id
-        text = ""
+        key = _STATUS_TO_KEY.get(status)
+        if not key:
+            return
+
+        lang = normalize_language(client_language)
+        text = _CLIENT_TEXT[key][lang].format(id=order_id)
         keyboard = None
 
-        if status == OrderStatus.ASSIGNED:
-            text = _client_text(order, "assigned")
-        elif status == OrderStatus.ACCEPTED:
-            text = _client_text(order, "accepted")
-        elif status == OrderStatus.ON_THE_WAY:
-            text = _client_text(order, "on_the_way")
-        elif status == OrderStatus.ARRIVED:
-            text = _client_text(order, "arrived")
-        elif status == OrderStatus.IN_PROGRESS:
-            text = _client_text(order, "in_progress")
-        elif status == OrderStatus.CANCELLED:
-            text = _client_text(order, "cancelled")
-        elif status == OrderStatus.COMPLETED:
-            text = _client_text(order, "completed")
-            # Rating buttons: 1–5 stars
+        if status == OrderStatus.COMPLETED:
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(text="⭐ 1", callback_data=f"client_rating:{order.id}:1"),
-                        InlineKeyboardButton(text="⭐⭐ 2", callback_data=f"client_rating:{order.id}:2"),
-                        InlineKeyboardButton(text="⭐⭐⭐ 3", callback_data=f"client_rating:{order.id}:3"),
+                        InlineKeyboardButton(
+                            text="⭐ 1", callback_data=f"client_rating:{order_id}:1"
+                        ),
+                        InlineKeyboardButton(
+                            text="⭐⭐ 2", callback_data=f"client_rating:{order_id}:2"
+                        ),
+                        InlineKeyboardButton(
+                            text="⭐⭐⭐ 3", callback_data=f"client_rating:{order_id}:3"
+                        ),
                     ],
                     [
-                        InlineKeyboardButton(text="⭐⭐⭐⭐ 4", callback_data=f"client_rating:{order.id}:4"),
-                        InlineKeyboardButton(text="⭐⭐⭐⭐⭐ 5", callback_data=f"client_rating:{order.id}:5"),
+                        InlineKeyboardButton(
+                            text="⭐⭐⭐⭐ 4", callback_data=f"client_rating:{order_id}:4"
+                        ),
+                        InlineKeyboardButton(
+                            text="⭐⭐⭐⭐⭐ 5", callback_data=f"client_rating:{order_id}:5"
+                        ),
                     ],
                 ]
             )
 
-        if not text:
-            return
-
         try:
-            await self.bot.send_message(chat_id=client_id, text=text, reply_markup=keyboard)
+            await self.bot.send_message(
+                chat_id=client_telegram_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
         except Exception as exc:
-            logger.exception("Failed to send client notification to %s: %s", client_id, exc)
+            logger.error(
+                "Failed to notify client %s of status %s: %s",
+                client_telegram_id, status, exc
+            )
 
-    # ── Dispatcher notifications ────────────────────────────────────────────
+    # ── Dispatcher notifications ──────────────────────────────────────────────
 
     async def notify_new_order(
         self,
@@ -207,18 +223,16 @@ class NotificationService:
         latitude: float,
         longitude: float,
     ) -> None:
-        """Broadcast new order notification to all dispatcher targets."""
-        maps_link = f"https://maps.google.com/?q={latitude},{longitude}"
+        """Broadcast new order to all dispatcher targets."""
+        maps = f"https://maps.google.com/?q={latitude},{longitude}"
         text = (
             "🚨 <b>Yangi buyurtma!</b>\n\n"
             f"🆔 ID: <b>#{order_id}</b>\n"
-            f"👤 Mijoz ID: <code>{client_telegram_id}</code>\n"
             f"📞 Telefon: <b>{phone}</b>\n"
             f"🛠 Muammo: <b>{issue}</b>\n"
-            f'📍 <a href="{maps_link}">Google Maps da ko\'rish</a>\n\n'
-            "⚠️ Ustani biriktirish uchun quyidagi tugmani bosing."
+            f'📍 <a href="{maps}">Google Maps</a>\n\n'
+            "Usta biriktirish uchun tugmani bosing:"
         )
-
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -233,112 +247,116 @@ class NotificationService:
         targets = self._broadcast_targets()
         if not targets:
             logger.warning(
-                "No dispatcher/admin targets configured — new order #%s will not be notified!",
-                order_id,
+                "No dispatcher targets configured — order #%s not broadcast!", order_id
             )
+            return
 
-        for target_id in targets:
+        for target in targets:
             try:
                 await self.bot.send_message(
-                    chat_id=target_id,
-                    text=text,
-                    reply_markup=keyboard,
-                    parse_mode="HTML",
+                    chat_id=target, text=text, reply_markup=keyboard, parse_mode="HTML"
                 )
             except Exception as exc:
-                logger.error("Failed to broadcast new order #%s to %s: %s", order_id, target_id, exc)
+                logger.error("Broadcast order #%s to %s failed: %s", order_id, target, exc)
 
-    async def notify_master_new_assignment(self, order: Order, master_telegram_id: int) -> None:
-        """Send order details + Accept/Reject buttons to the assigned master."""
-        maps_link = f"https://maps.google.com/?q={order.latitude},{order.longitude}"
+    async def notify_master_new_assignment(
+        self,
+        *,
+        order_id: int,
+        phone: str,
+        issue_label: str,
+        latitude: float,
+        longitude: float,
+        master_telegram_id: int,
+    ) -> None:
+        """Send order details + Accept/Reject buttons to master."""
+        maps = f"https://maps.google.com/?q={latitude},{longitude}"
         text = (
-            "📦 <b>Sizga yangi buyurtma biriktirildi!</b>\n\n"
-            f"🆔 ID: <b>#{order.id}</b>\n"
-            f"🛠 Muammo: <b>{order.issue_label}</b>\n"
-            f"📞 Telefon: <b>{order.phone}</b>\n"
-            f'📍 <a href="{maps_link}">Lokatsiyani ko\'rish</a>\n\n'
-            "✅ Qabul qiling yoki ❌ rad eting:"
+            "📦 <b>Sizga yangi buyurtma!</b>\n\n"
+            f"🆔 ID: <b>#{order_id}</b>\n"
+            f"🛠 Muammo: <b>{issue_label}</b>\n"
+            f"📞 Telefon: <b>{phone}</b>\n"
+            f'📍 <a href="{maps}">Lokatsiya</a>\n\n'
+            "Qabul qiling yoki rad eting:"
         )
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="✅ Qabul qilish", callback_data=f"master_accept:{order.id}"
+                        text="✅ Qabul qilish",
+                        callback_data=f"master_accept:{order_id}",
                     ),
                     InlineKeyboardButton(
-                        text="❌ Rad etish", callback_data=f"master_reject:{order.id}"
+                        text="❌ Rad etish",
+                        callback_data=f"master_reject:{order_id}",
                     ),
                 ]
             ]
         )
         try:
-            # Send location first so master can navigate easily
             await self.bot.send_location(
                 chat_id=master_telegram_id,
-                latitude=order.latitude,
-                longitude=order.longitude,
+                latitude=latitude,
+                longitude=longitude,
             )
             await self.bot.send_message(
-                chat_id=master_telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML"
+                chat_id=master_telegram_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
             )
         except Exception as exc:
-            logger.exception("Failed to notify master %s: %s", master_telegram_id, exc)
+            logger.error("Failed to notify master %s: %s", master_telegram_id, exc)
 
     async def notify_dispatcher_completion_review(
-        self, order: Order, master_name: str
+        self,
+        *,
+        order_id: int,
+        final_amount: float | None,
+        video_file_id: str | None,
+        master_name: str,
     ) -> None:
-        """
-        Tell dispatcher/admin that master has finished and submitted video + amount.
-        Includes a 'Confirm Payment' button.
-        """
-        amount_str = f"{float(order.final_amount):,.0f} so'm" if order.final_amount else "Noma'lum"
+        """Tell dispatchers master finished — show Confirm Payment button."""
+        amount_str = (
+            f"{float(final_amount):,.0f} so'm" if final_amount else "Noma'lum"
+        )
         text = (
             f"✅ <b>{master_name}</b> ishni yakunladi.\n\n"
-            f"🆔 Buyurtma: <b>#{order.id}</b>\n"
-            f"💰 Summa: <b>{amount_str}</b>\n"
-            "🎬 Video isbot quyida yuborildi. To'lovni tasdiqlang:"
+            f"🆔 Buyurtma: <b>#{order_id}</b>\n"
+            f"💰 Summa: <b>{amount_str}</b>\n\n"
+            "To'lovni tasdiqlang:"
         )
-
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
                         text="💰 To'lovni tasdiqlash",
-                        callback_data=f"dispatch_complete:{order.id}",
+                        callback_data=f"dispatch_complete:{order_id}",
                     )
                 ]
             ]
         )
 
         targets = self._broadcast_targets()
-        for target_id in targets:
+        for target in targets:
             try:
-                # Send completion video if available
-                if order.video_file_id:
+                # Send completion video first if available
+                if video_file_id:
                     try:
                         await self.bot.send_video_note(
-                            chat_id=target_id, video_note=order.video_file_id
+                            chat_id=target, video_note=video_file_id
                         )
                     except Exception:
                         try:
-                            await self.bot.send_video(
-                                chat_id=target_id, video=order.video_file_id
-                            )
+                            await self.bot.send_video(chat_id=target, video=video_file_id)
                         except Exception as ve:
-                            logger.error(
-                                "Could not send completion video to %s: %s", target_id, ve
-                            )
+                            logger.error("Could not send video to %s: %s", target, ve)
 
                 await self.bot.send_message(
-                    chat_id=target_id,
-                    text=text,
-                    reply_markup=keyboard,
-                    parse_mode="HTML",
+                    chat_id=target, text=text, reply_markup=keyboard, parse_mode="HTML"
                 )
             except Exception as exc:
                 logger.error(
-                    "Failed to broadcast completion review #%s to %s: %s",
-                    order.id,
-                    target_id,
-                    exc,
+                    "Failed to notify dispatcher %s of completion #%s: %s",
+                    target, order_id, exc
                 )

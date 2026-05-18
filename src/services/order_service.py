@@ -1,25 +1,25 @@
+"""
+OrderService — all business logic for order lifecycle.
+
+IMPORTANT: Since all ORM relationships use lazy='raise', this service
+MUST explicitly load any relationship it needs via joinedload/selectinload
+in the SELECT query. Never access .client or .status_history without loading them first.
+"""
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload, selectinload
 
 from src.db.enums import IssueType, OrderStatus
 from src.db.models.order import Order, OrderStatusHistory
 from src.db.models.user import User
 
+# ── Issue label → type mapping ────────────────────────────────────────────────
+
 ISSUE_LABEL_TO_TYPE: dict[str, IssueType] = {
-    # Without emojis (fallback / manual)
-    "Zavod bo'lmayapti": IssueType.ENGINE_NOT_STARTING,
-    "Не заводится": IssueType.ENGINE_NOT_STARTING,
-    "Akkumulyator o'tirgan": IssueType.BATTERY_DOWN,
-    "Сел аккумулятор": IssueType.BATTERY_DOWN,
-    "Balon yorilgan": IssueType.FLAT_TIRE,
-    "Пробито колесо": IssueType.FLAT_TIRE,
-    "Boshqa muammo": IssueType.OTHER,
-    "Другая проблема": IssueType.OTHER,
-    # With emojis (from keyboard buttons)
     "🛠 Zavod bo'lmayapti": IssueType.ENGINE_NOT_STARTING,
     "🛠 Не заводится": IssueType.ENGINE_NOT_STARTING,
     "🔋 Akkumulyator o'tirgan": IssueType.BATTERY_DOWN,
@@ -28,6 +28,15 @@ ISSUE_LABEL_TO_TYPE: dict[str, IssueType] = {
     "🎈 Пробито колесо": IssueType.FLAT_TIRE,
     "❓ Boshqa muammo": IssueType.OTHER,
     "❓ Другая проблема": IssueType.OTHER,
+    # Without emojis (fallback)
+    "Zavod bo'lmayapti": IssueType.ENGINE_NOT_STARTING,
+    "Не заводится": IssueType.ENGINE_NOT_STARTING,
+    "Akkumulyator o'tirgan": IssueType.BATTERY_DOWN,
+    "Сел аккумулятор": IssueType.BATTERY_DOWN,
+    "Balon yorilgan": IssueType.FLAT_TIRE,
+    "Пробито колесо": IssueType.FLAT_TIRE,
+    "Boshqa muammo": IssueType.OTHER,
+    "Другая проблема": IssueType.OTHER,
 }
 
 MASTER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
@@ -38,7 +47,6 @@ MASTER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.IN_PROGRESS: {OrderStatus.AWAITING_CONFIRM},
 }
 
-# Dispatcher/admin can complete any order that is AWAITING_CONFIRM
 DISPATCHER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.AWAITING_CONFIRM: {OrderStatus.COMPLETED},
 }
@@ -52,6 +60,8 @@ MASTER_ACTIVE_STATUSES = {
     OrderStatus.AWAITING_CONFIRM,
 }
 
+
+# ── Exceptions ─────────────────────────────────────────────────────────────────
 
 class OrderServiceError(Exception):
     pass
@@ -69,6 +79,8 @@ class OrderPermissionDeniedError(OrderServiceError):
     pass
 
 
+# ── Payload ───────────────────────────────────────────────────────────────────
+
 @dataclass(slots=True)
 class DriverOrderPayload:
     client_telegram_id: int
@@ -80,11 +92,18 @@ class DriverOrderPayload:
     longitude: float
 
 
+# ── Service ───────────────────────────────────────────────────────────────────
+
 class OrderService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
     async def create_driver_order(self, payload: DriverOrderPayload) -> Order:
+        """
+        Create a new order for a client.
+        Returns the saved Order with client_id set.
+        Does NOT load any relationships — callers only need scalar fields.
+        """
         user = await self._get_or_create_user(
             telegram_id=payload.client_telegram_id,
             full_name=payload.full_name,
@@ -104,7 +123,7 @@ class OrderService:
             status=OrderStatus.NEW,
         )
         self.session.add(order)
-        await self.session.flush()
+        await self.session.flush()  # get order.id
 
         self.session.add(
             OrderStatusHistory(
@@ -116,53 +135,72 @@ class OrderService:
         )
 
         await self.session.commit()
+        # Refresh ONLY the Order scalar columns — do not load relationships
         await self.session.refresh(order)
         return order
 
     async def get_order(self, order_id: int) -> Order:
-        # NOTE: Do NOT use with_for_update() here — it's incompatible with SQLite.
-        # Use _get_order_for_update() only in write operations inside a transaction.
-        row = await self.session.execute(select(Order).where(Order.id == order_id))
-        order = row.scalar_one_or_none()
+        """Fetch order by ID. Relationships are NOT loaded — access scalar columns only."""
+        order = await self.session.scalar(
+            select(Order).where(Order.id == order_id)
+        )
         if order is None:
             raise OrderNotFoundError(f"Order #{order_id} not found")
         return order
 
-    async def list_orders_by_status(self, statuses: list[OrderStatus], limit: int = 10) -> list[Order]:
-        rows = await self.session.execute(
+    async def get_order_with_client(self, order_id: int) -> Order:
+        """Fetch order with .client relationship eagerly loaded."""
+        order = await self.session.scalar(
+            select(Order)
+            .where(Order.id == order_id)
+            .options(joinedload(Order.client))
+        )
+        if order is None:
+            raise OrderNotFoundError(f"Order #{order_id} not found")
+        return order
+
+    async def list_orders_by_status(
+        self, statuses: list[OrderStatus], limit: int = 10
+    ) -> list[Order]:
+        """List orders filtered by status. No relationships loaded."""
+        rows = await self.session.scalars(
             select(Order)
             .where(Order.status.in_(statuses))
             .order_by(Order.created_at.asc())
             .limit(limit)
         )
-        return list(rows.scalars().all())
+        return list(rows.all())
 
-    async def list_master_active_orders(self, master_telegram_id: int, limit: int = 10) -> list[Order]:
-        rows = await self.session.execute(
+    async def list_master_active_orders(
+        self, master_telegram_id: int, limit: int = 10
+    ) -> list[Order]:
+        """List active orders assigned to a specific master."""
+        rows = await self.session.scalars(
             select(Order)
             .where(Order.assigned_master_telegram_id == master_telegram_id)
             .where(Order.status.in_(MASTER_ACTIVE_STATUSES))
             .order_by(Order.updated_at.asc())
             .limit(limit)
         )
-        return list(rows.scalars().all())
+        return list(rows.all())
 
-    async def assign_order(self, order_id: int, dispatcher_telegram_id: int) -> Order:
-        """Set order status to ASSIGNED and record the dispatcher."""
-        order = await self._fetch_order(order_id)
+    async def assign_order(
+        self, order_id: int, dispatcher_telegram_id: int
+    ) -> Order:
+        """Transition order NEW → ASSIGNED, record dispatcher."""
+        order = await self.get_order(order_id)
 
         if order.status not in (OrderStatus.NEW, OrderStatus.REJECTED):
             raise InvalidOrderTransitionError(
                 f"Order #{order_id} is {order.status}, expected NEW or REJECTED"
             )
 
-        await self._change_status(
+        return await self._change_status(
             order,
             to_status=OrderStatus.ASSIGNED,
             actor_telegram_id=dispatcher_telegram_id,
             assigned_dispatcher_telegram_id=dispatcher_telegram_id,
         )
-        return order
 
     async def assign_master(
         self,
@@ -170,20 +208,17 @@ class OrderService:
         dispatcher_telegram_id: int,
         master_telegram_id: int,
     ) -> Order:
-        """Assign a master to an already-ASSIGNED order (no status change, just recording master)."""
-        order = await self._fetch_order(order_id)
+        """Record master assignment on an ASSIGNED order (no status change)."""
+        order = await self.get_order(order_id)
 
         if order.status != OrderStatus.ASSIGNED:
             raise InvalidOrderTransitionError(
-                f"Order #{order_id} is {order.status}, expected {OrderStatus.ASSIGNED}"
+                f"Order #{order_id} is {order.status}, expected ASSIGNED"
             )
 
-        # Record which master was assigned. The dispatcher field stays as-is.
         order.assigned_master_telegram_id = master_telegram_id
-        # Overwrite dispatcher if needed (handles group-chat flows where different admin clicked)
         order.assigned_dispatcher_telegram_id = dispatcher_telegram_id
 
-        # Log the master assignment in history
         self.session.add(
             OrderStatusHistory(
                 order_id=order.id,
@@ -206,7 +241,8 @@ class OrderService:
         video_file_id: str | None = None,
         final_amount: float | None = None,
     ) -> Order:
-        order = await self._fetch_order(order_id)
+        """Master updates their order status."""
+        order = await self.get_order(order_id)
 
         if order.assigned_master_telegram_id != master_telegram_id:
             raise OrderPermissionDeniedError(
@@ -225,8 +261,9 @@ class OrderService:
             if final_amount is not None:
                 order.final_amount = Decimal(str(final_amount))
 
-        await self._change_status(order, to_status=to_status, actor_telegram_id=master_telegram_id)
-        return order
+        return await self._change_status(
+            order, to_status=to_status, actor_telegram_id=master_telegram_id
+        )
 
     async def dispatcher_transition(
         self,
@@ -237,54 +274,46 @@ class OrderService:
         final_amount: float | None = None,
     ) -> Order:
         """
-        Complete or transition an order as a dispatcher/admin.
-        
-        NOTE: We intentionally do NOT check that dispatcher_telegram_id matches
-        order.assigned_dispatcher_telegram_id. In group chats, any authorized
-        dispatcher/admin should be able to complete an order. Permission checking
-        is done at the handler level via is_dispatcher().
+        Dispatcher/admin finalizes an order.
+        NOTE: No identity check — any authorized dispatcher can complete any order.
+        Permission is checked at handler level via is_dispatcher().
         """
-        order = await self._fetch_order(order_id)
+        order = await self.get_order(order_id)
 
         allowed_next = DISPATCHER_ALLOWED_TRANSITIONS.get(order.status, set())
         if to_status not in allowed_next:
             raise InvalidOrderTransitionError(
-                f"Transition {order.status} → {to_status} is not allowed for dispatcher. "
-                f"Order is currently: {order.status}"
+                f"Cannot transition order #{order_id} from {order.status} to {to_status}. "
+                f"Order must be in AWAITING_CONFIRM status."
             )
 
         if to_status == OrderStatus.COMPLETED:
             if final_amount is not None:
                 order.final_amount = Decimal(str(final_amount))
-            elif order.final_amount is None:
+            if order.final_amount is None:
                 raise InvalidOrderTransitionError(
-                    "Cannot complete order: final_amount is not set. "
-                    "Master must submit the amount before dispatcher can complete."
+                    "Cannot complete: final_amount not set. Master must submit amount first."
                 )
             order.completed_at = datetime.now(timezone.utc)
 
-        await self._change_status(
-            order,
-            to_status=to_status,
-            actor_telegram_id=dispatcher_telegram_id,
+        return await self._change_status(
+            order, to_status=to_status, actor_telegram_id=dispatcher_telegram_id
         )
-        return order
 
     async def dispatcher_cancel_order(self, order_id: int) -> Order:
-        """Cancel any non-completed order. Used for manual dispatcher override."""
-        order = await self._fetch_order(order_id)
+        """Cancel any non-terminal order."""
+        order = await self.get_order(order_id)
 
         if order.status in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
             raise InvalidOrderTransitionError(
-                f"Order #{order_id} is already {order.status.name}, cannot cancel"
+                f"Order #{order_id} is already {order.status.name}"
             )
 
-        await self._change_status(
+        return await self._change_status(
             order,
             to_status=OrderStatus.CANCELLED,
             actor_telegram_id=order.assigned_dispatcher_telegram_id or 0,
         )
-        return order
 
     async def save_feedback(
         self,
@@ -294,8 +323,8 @@ class OrderService:
         feedback_text: str | None = None,
         shortcomings: str | None = None,
     ) -> Order:
-        """Save client feedback after order completion."""
-        order = await self._fetch_order(order_id)
+        """Save client feedback fields on a completed order."""
+        order = await self.get_order(order_id)
         if rating is not None:
             order.rating = rating
         if feedback_text is not None:
@@ -306,7 +335,7 @@ class OrderService:
         await self.session.refresh(order)
         return order
 
-    # ── internal helpers ──────────────────────────────────────────────────────
+    # ── Internals ──────────────────────────────────────────────────────────────
 
     async def _change_status(
         self,
@@ -315,7 +344,7 @@ class OrderService:
         to_status: OrderStatus,
         actor_telegram_id: int,
         assigned_dispatcher_telegram_id: int | None = None,
-    ) -> None:
+    ) -> Order:
         old_status = order.status
         order.status = to_status
         if assigned_dispatcher_telegram_id is not None:
@@ -332,13 +361,6 @@ class OrderService:
 
         await self.session.commit()
         await self.session.refresh(order)
-
-    async def _fetch_order(self, order_id: int) -> Order:
-        """Fetch order by ID. Does NOT use SELECT FOR UPDATE (SQLite-safe)."""
-        row = await self.session.execute(select(Order).where(Order.id == order_id))
-        order = row.scalar_one_or_none()
-        if order is None:
-            raise OrderNotFoundError(f"Order #{order_id} not found")
         return order
 
     async def _get_or_create_user(
@@ -349,8 +371,9 @@ class OrderService:
         language: str | None,
         phone: str,
     ) -> User:
-        row = await self.session.execute(select(User).where(User.telegram_id == telegram_id))
-        user = row.scalar_one_or_none()
+        user = await self.session.scalar(
+            select(User).where(User.telegram_id == telegram_id)
+        )
         if user is None:
             user = User(
                 telegram_id=telegram_id,
@@ -360,12 +383,11 @@ class OrderService:
             )
             self.session.add(user)
             await self.session.flush()
-            return user
-
-        user.phone = phone
-        if full_name:
-            user.full_name = full_name
-        if language:
-            user.language = language
-        await self.session.flush()
+        else:
+            user.phone = phone
+            if full_name:
+                user.full_name = full_name
+            if language:
+                user.language = language
+            await self.session.flush()
         return user
