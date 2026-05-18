@@ -82,6 +82,7 @@ async def _heal_orders_table(engine_: AsyncEngine) -> None:
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
+        "ALTER TABLE orders ALTER COLUMN order_uid DROP NOT NULL",
     ])
 
 
