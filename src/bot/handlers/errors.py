@@ -30,7 +30,7 @@ async def global_error_handler(event: ErrorEvent) -> bool:
         f"🚨 **UNHANDLED BOT ERROR**\n\n"
         f"Update ID: `{update.update_id}`\n"
         f"Error: `{str(exc)}`\n\n"
-        f"Traceback:\n<pre>{tb[:3000]}</pre>"
+        f"Traceback:\n```\n{tb[:3000]}\n```"
     )
 
     # 3. Notify the user

@@ -18,37 +18,39 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # 1. Fix 'language' column type mismatch. 
-    # If it's a custom enum type, convert it to VARCHAR.
-    # We use a TRY...EXCEPT block-like logic via SQL to handle cases where it's already VARCHAR.
-    op.execute("""
-        DO $$ 
-        BEGIN 
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'users' 
-                AND column_name = 'language' 
-                AND data_type = 'USER-DEFINED'
-            ) THEN
-                ALTER TABLE users ALTER COLUMN language TYPE VARCHAR(10) USING language::text;
-            END IF;
-        END $$;
-    """)
+    conn = op.get_bind()
+    if conn.dialect.name == "postgresql":
+        # 1. Fix 'language' column type mismatch. 
+        # If it's a custom enum type, convert it to VARCHAR.
+        # We use a TRY...EXCEPT block-like logic via SQL to handle cases where it's already VARCHAR.
+        op.execute("""
+            DO $$ 
+            BEGIN 
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'users' 
+                    AND column_name = 'language' 
+                    AND data_type = 'USER-DEFINED'
+                ) THEN
+                    ALTER TABLE users ALTER COLUMN language TYPE VARCHAR(10) USING language::text;
+                END IF;
+            END $$;
+        """)
 
-    # 2. Ensure orders table columns have correct types if they were created as native enums
-    op.execute("""
-        DO $$ 
-        BEGIN 
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'orders' 
-                AND column_name = 'status' 
-                AND data_type = 'USER-DEFINED'
-            ) THEN
-                ALTER TABLE orders ALTER COLUMN status TYPE VARCHAR(32) USING status::text;
-            END IF;
-        END $$;
-    """)
+        # 2. Ensure orders table columns have correct types if they were created as native enums
+        op.execute("""
+            DO $$ 
+            BEGIN 
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'orders' 
+                    AND column_name = 'status' 
+                    AND data_type = 'USER-DEFINED'
+                ) THEN
+                    ALTER TABLE orders ALTER COLUMN status TYPE VARCHAR(32) USING status::text;
+                END IF;
+            END $$;
+        """)
 
 
 def downgrade() -> None:
