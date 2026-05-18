@@ -13,5 +13,6 @@ class User(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     is_master: Mapped[bool] = mapped_column(default=False)
+    is_blocked: Mapped[bool] = mapped_column(default=False, server_default="false")
 
     orders = relationship("Order", back_populates="client", lazy="selectin")
