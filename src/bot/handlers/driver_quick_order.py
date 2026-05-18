@@ -123,7 +123,8 @@ async def choose_language(callback: CallbackQuery, state: FSMContext) -> None:
         await msg.answer(_t(language, "main_menu"), reply_markup=start_keyboard(language))
     await callback.answer()
 
-@router.message(F.text.in_(CANCEL_BUTTONS) | Command("cancel"))
+@router.message(F.text.in_(CANCEL_BUTTONS))
+@router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     lang = await _get_current_language(state, message.from_user.id)
     await state.clear()
@@ -157,7 +158,8 @@ async def cmd_order_status(message: Message, state: FSMContext) -> None:
         lines.append(_t(lang, "order_item", id=o.id, status=o.status.name, issue=o.issue_label, date=o.created_at.strftime("%H:%M %d.%m")))
     await message.answer("\n".join(lines))
 
-@router.message(F.text.in_(set(BUTTONS["start_order"].values()) | {START_ORDER_BUTTON}) | Command("new_order"))
+@router.message(F.text.in_(set(BUTTONS["start_order"].values()) | {START_ORDER_BUTTON}))
+@router.message(Command("new_order"))
 async def start_quick_order(message: Message, state: FSMContext) -> None:
     lang = await _get_current_language(state, message.from_user.id)
     await state.clear()
