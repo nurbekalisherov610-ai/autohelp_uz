@@ -1,8 +1,7 @@
 import asyncio
 import logging
 
-from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import text
 
 from src.db.session import engine
 
@@ -20,10 +19,12 @@ async def wait_for_dependencies(
 
     for attempt in range(1, attempts + 1):
         try:
+            # Use text() wrapper — required by SQLAlchemy 2.x for raw SQL
             async with engine.begin() as conn:
-                await conn.execute(select(1))
+                await conn.execute(text("SELECT 1"))
 
             if use_redis:
+                from redis.asyncio import Redis
                 redis = Redis.from_url(redis_dsn)
                 try:
                     await redis.ping()

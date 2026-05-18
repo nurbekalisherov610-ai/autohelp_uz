@@ -1,3 +1,13 @@
+"""
+Master order management handlers.
+
+Masters receive orders via notification and can:
+1. Accept or reject the order
+2. Update their status: On the Way → Arrived → In Progress
+3. Complete the order: submit a completion video + service amount
+
+The dispatcher then confirms the payment to mark the order COMPLETED.
+"""
 import logging
 
 from aiogram import F, Router
@@ -20,13 +30,13 @@ from src.core.config import get_settings
 from src.db.enums import OrderStatus
 from src.db.session import AsyncSessionFactory
 from src.services.notification_service import NotificationService
-from src.services.order_service import (
-    OrderService,
-)
+from src.services.order_service import OrderService
 
 router = Router(name="master_orders")
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
+# Map callback alias → OrderStatus
 MASTER_STATUS_ALIASES: dict[str, OrderStatus] = {
     "on_the_way": OrderStatus.ON_THE_WAY,
     "arrived": OrderStatus.ARRIVED,
@@ -36,27 +46,29 @@ MASTER_STATUS_ALIASES: dict[str, OrderStatus] = {
 
 
 def _safe_message(callback: CallbackQuery) -> Message | None:
-    """Return the real Message object or None if the message is inaccessible."""
     msg = callback.message
     if msg is None or isinstance(msg, InaccessibleMessage):
         return None
     return msg
 
 
-def _get_next_status_kb(order_id: int, current_status: OrderStatus) -> InlineKeyboardMarkup | None:
-    buttons = []
-    if current_status == OrderStatus.ACCEPTED:
-        buttons.append([InlineKeyboardButton(text="📍 Yo'lga chiqdim", callback_data=f"master_status:{order_id}:on_the_way")])
-    elif current_status == OrderStatus.ON_THE_WAY:
-        buttons.append([InlineKeyboardButton(text="🏁 Yetib keldim", callback_data=f"master_status:{order_id}:arrived")])
-    elif current_status == OrderStatus.ARRIVED:
-        buttons.append([InlineKeyboardButton(text="🛠 Ishni boshladim", callback_data=f"master_status:{order_id}:in_progress")])
-    elif current_status == OrderStatus.IN_PROGRESS:
-        buttons.append([InlineKeyboardButton(text="✅ Ishni tugatdim (Kutish)", callback_data=f"master_status:{order_id}:awaiting_confirm")])
-
-    if buttons:
-        return InlineKeyboardMarkup(inline_keyboard=buttons)
-    return None
+def _next_status_kb(order_id: int, current_status: OrderStatus) -> InlineKeyboardMarkup | None:
+    """Return the next-action button for a master based on current status."""
+    NEXT: dict[OrderStatus, tuple[str, str]] = {
+        OrderStatus.ACCEPTED: ("📍 Yo'lga chiqdim", "on_the_way"),
+        OrderStatus.ON_THE_WAY: ("🏁 Yetib keldim", "arrived"),
+        OrderStatus.ARRIVED: ("🛠 Ishni boshladim", "in_progress"),
+        OrderStatus.IN_PROGRESS: ("✅ Ishni tugatdim", "awaiting_confirm"),
+    }
+    entry = NEXT.get(current_status)
+    if not entry:
+        return None
+    text, alias = entry
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=text, callback_data=f"master_status:{order_id}:{alias}")]
+        ]
+    )
 
 
 def _cancel_kb() -> ReplyKeyboardMarkup:
@@ -67,17 +79,17 @@ def _cancel_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def _parse_parts(message: Message) -> list[str]:
-    text = (message.text or "").strip()
-    return [part for part in text.split() if part]
-
+# ── Commands ──────────────────────────────────────────────────────────────────
 
 @router.message(Command("master_help"))
 async def master_help(message: Message) -> None:
     await message.answer(
-        "Master buyruqlari:\n"
-        "/my_jobs - Menga biriktirilgan faol buyurtmalar\n"
-        "Yoki buyurtma xabaridagi tugmalardan foydalaning!"
+        "👨‍🔧 <b>Master buyruqlari:</b>\n\n"
+        "/my_jobs — Menga biriktirilgan faol buyurtmalar\n"
+        "/register_master — Master sifatida ro'yxatdan o'tish\n\n"
+        "Buyurtma kelganda, <b>Qabul qilish</b> tugmasini bosing va "
+        "keyingi statuslarni ketma-ket yangilang.",
+        parse_mode="HTML",
     )
 
 
@@ -87,45 +99,38 @@ async def register_master(message: Message) -> None:
         await message.answer("Foydalanuvchi aniqlanmadi.")
         return
 
-    from src.core.config import get_settings as _get_settings
-    _settings = _get_settings()
-
-    # Determine valid secrets: master_secret env var, or fallback "master123"
-    valid_secret = getattr(_settings, "master_secret", None) or "master123"
-
-    # 1. Check if user is in MASTER_IDS list (auto-pass)
-    if _settings.master_ids:
-        m_ids = {int(x.strip()) for x in _settings.master_ids.split(",") if x.strip().lstrip("-").isdigit()}
-        if message.from_user.id in m_ids:
-            # Skip secret check
-            pass
-        else:
-            # 2. Otherwise check secret code
-            args = message.text.split() if message.text else []
-            if len(args) < 2 or args[1] != valid_secret:
-                await message.answer("Maxfiy kod xato. Format: /register_master <maxfiykod>")
-                return
+    # Check if in MASTER_IDS (auto-pass) or validate secret
+    master_ids = settings.parsed_master_ids
+    if master_ids and message.from_user.id in master_ids:
+        # Auto-authorized via env config
+        pass
     else:
-        # 2. Check secret code if no MASTER_IDS configured
-        args = message.text.split() if message.text else []
+        args = (message.text or "").split()
+        valid_secret = settings.master_secret or "master123"
         if len(args) < 2 or args[1] != valid_secret:
-            await message.answer("Maxfiy kod xato. Format: /register_master <maxfiykod>")
+            await message.answer(
+                "❌ Maxfiy kod xato.\n\nFormat: <code>/register_master &lt;maxfiy_kod&gt;</code>",
+                parse_mode="HTML",
+            )
             return
 
     from sqlalchemy import select
-
     from src.db.models.user import User
 
     async with AsyncSessionFactory() as session:
-        user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
+        user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
         if user:
             user.is_master = True
             if message.from_user.full_name:
                 user.full_name = message.from_user.full_name
             await session.commit()
-            await message.answer("✅ Siz muvaffaqiyatli Master sifatida ro'yxatdan o'tdingiz!")
+            await message.answer(
+                "✅ Siz muvaffaqiyatli <b>Master</b> sifatida ro'yxatdan o'tdingiz!",
+                parse_mode="HTML",
+            )
         else:
-            # Auto-create user if not registered yet
             new_user = User(
                 telegram_id=message.from_user.id,
                 full_name=message.from_user.full_name,
@@ -133,7 +138,10 @@ async def register_master(message: Message) -> None:
             )
             session.add(new_user)
             await session.commit()
-            await message.answer("✅ Profil yaratildi va Master sifatida ro'yxatdan o'tdingiz!")
+            await message.answer(
+                "✅ Profil yaratildi va <b>Master</b> sifatida ro'yxatdan o'tdingiz!",
+                parse_mode="HTML",
+            )
 
 
 @router.message(Command("my_jobs"))
@@ -141,20 +149,27 @@ async def my_jobs(message: Message) -> None:
     if message.from_user is None:
         return
 
-    master_telegram_id = message.from_user.id
     async with AsyncSessionFactory() as session:
         service = OrderService(session)
-        orders = await service.list_master_active_orders(master_telegram_id=master_telegram_id, limit=10)
+        orders = await service.list_master_active_orders(
+            master_telegram_id=message.from_user.id, limit=10
+        )
 
     if not orders:
         await message.answer("Sizga hozircha faol buyurtma biriktirilmagan.")
         return
 
-    await message.answer("Faol buyurtmalar:")
+    await message.answer(f"📦 <b>{len(orders)} ta faol buyurtma:</b>", parse_mode="HTML")
     for order in orders:
-        text = f"#{order.id} | {order.status.name} | {order.issue_label} | {order.phone}"
-        await message.answer(text, reply_markup=_get_next_status_kb(order.id, order.status))
+        kb = _next_status_kb(order.id, order.status)
+        await message.answer(
+            f"#{order.id} | <b>{order.status.name}</b> | {order.issue_label} | {order.phone}",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
 
+
+# ── Callbacks — Accept / Reject ───────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("master_accept:"))
 async def cb_accept_order(callback: CallbackQuery) -> None:
@@ -166,6 +181,7 @@ async def cb_accept_order(callback: CallbackQuery) -> None:
     except (IndexError, ValueError):
         await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
         return
+
     master_telegram_id = callback.from_user.id
 
     try:
@@ -176,7 +192,7 @@ async def cb_accept_order(callback: CallbackQuery) -> None:
                 master_telegram_id=master_telegram_id,
                 to_status=OrderStatus.ACCEPTED,
             )
-            ns = NotificationService(bot=callback.bot, settings=get_settings())
+            ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
     except Exception as exc:
         logger.exception("Master accept failed for order #%s: %s", order_id, exc)
@@ -187,12 +203,15 @@ async def cb_accept_order(callback: CallbackQuery) -> None:
     if msg is not None:
         try:
             await msg.edit_text(
-                f"✅ Buyurtma #{order.id} qabul qilindi.\nStatus: ACCEPTED",
-                reply_markup=_get_next_status_kb(order.id, OrderStatus.ACCEPTED)
+                f"✅ Buyurtma <b>#{order.id}</b> qabul qilindi!\n"
+                f"Status: <b>ACCEPTED</b>\n\n"
+                "Tayyor bo'lganda yo'lga chiqing:",
+                reply_markup=_next_status_kb(order.id, OrderStatus.ACCEPTED),
+                parse_mode="HTML",
             )
         except TelegramBadRequest:
             pass
-    await callback.answer()
+    await callback.answer("✅ Qabul qilindi!")
 
 
 @router.callback_query(F.data.startswith("master_reject:"))
@@ -205,6 +224,7 @@ async def cb_reject_order(callback: CallbackQuery) -> None:
     except (IndexError, ValueError):
         await callback.answer("Noto'g'ri buyurtma ID.", show_alert=True)
         return
+
     master_telegram_id = callback.from_user.id
 
     try:
@@ -215,7 +235,7 @@ async def cb_reject_order(callback: CallbackQuery) -> None:
                 master_telegram_id=master_telegram_id,
                 to_status=OrderStatus.REJECTED,
             )
-            ns = NotificationService(bot=callback.bot, settings=get_settings())
+            ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
     except Exception as exc:
         logger.exception("Master reject failed for order #%s: %s", order_id, exc)
@@ -225,11 +245,13 @@ async def cb_reject_order(callback: CallbackQuery) -> None:
     msg = _safe_message(callback)
     if msg is not None:
         try:
-            await msg.edit_text(f"❌ Buyurtma #{order.id} rad etildi.")
+            await msg.edit_text(f"❌ Buyurtma <b>#{order.id}</b> rad etildi.", parse_mode="HTML")
         except TelegramBadRequest:
             pass
-    await callback.answer()
+    await callback.answer("Rad etildi.")
 
+
+# ── Callbacks — Status progression ───────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("master_status:"))
 async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
@@ -243,14 +265,14 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
     except (IndexError, ValueError):
         await callback.answer("Noto'g'ri status so'rovi.", show_alert=True)
         return
-    master_telegram_id = callback.from_user.id
 
+    master_telegram_id = callback.from_user.id
     to_status = MASTER_STATUS_ALIASES.get(alias)
     if not to_status:
-        await callback.answer("Noto'g'ri status", show_alert=True)
+        await callback.answer("Noto'g'ri status.", show_alert=True)
         return
 
-    # Trigger Video and Amount Collection FSM instead of updating right away
+    # Completion flow: collect video + amount before transitioning
     if to_status == OrderStatus.AWAITING_CONFIRM:
         await state.update_data(master_order_id=order_id)
         await state.set_state(MasterCompletionState.waiting_for_video)
@@ -258,15 +280,17 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
         if msg is not None:
             try:
                 await msg.edit_text(
-                    f"Buyurtma #{order_id} bo'yicha ish yakunlandi.\n"
-                    "Iltimos, isbot sifatida xizmat jarayonidan qisqa video xabar (video note) yuboring:"
+                    f"📹 Buyurtma <b>#{order_id}</b> yakunlash uchun:\n\n"
+                    "Iltimos, xizmat jarayonidan qisqa <b>video xabar (video note)</b> yuboring:",
+                    parse_mode="HTML",
                 )
             except TelegramBadRequest:
                 pass
-            await msg.answer("Yoki jarayonni bekor qilish uchun tugmani bosing:", reply_markup=_cancel_kb())
+            await msg.answer("Bekor qilish uchun:", reply_markup=_cancel_kb())
         await callback.answer()
         return
 
+    # All other transitions: update immediately
     try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
@@ -275,25 +299,34 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
                 master_telegram_id=master_telegram_id,
                 to_status=to_status,
             )
-            ns = NotificationService(bot=callback.bot, settings=get_settings())
+            ns = NotificationService(bot=callback.bot, settings=settings)
             await ns.notify_client_status_change(order, order.status)
     except Exception as exc:
         logger.exception("Master status transition failed for order #%s: %s", order_id, exc)
         await callback.answer(str(exc)[:200], show_alert=True)
         return
 
-    new_kb = _get_next_status_kb(order.id, order.status)
+    new_kb = _next_status_kb(order.id, order.status)
     msg = _safe_message(callback)
     if msg is not None:
+        status_labels = {
+            OrderStatus.ON_THE_WAY: "🚗 Yo'lda",
+            OrderStatus.ARRIVED: "📍 Yetib keldim",
+            OrderStatus.IN_PROGRESS: "🛠 Ishlamoqda",
+        }
+        label = status_labels.get(order.status, order.status.name)
         try:
             await msg.edit_text(
-                f"Buyurtma #{order.id}\nStatus yangilandi: {order.status.name}",
-                reply_markup=new_kb
+                f"Buyurtma <b>#{order.id}</b>\nStatus: <b>{label}</b>",
+                reply_markup=new_kb,
+                parse_mode="HTML",
             )
         except TelegramBadRequest:
             pass
-    await callback.answer()
+    await callback.answer(f"Status yangilandi!")
 
+
+# ── FSM — Completion video + amount ──────────────────────────────────────────
 
 @router.message(MasterCompletionState.waiting_for_video, F.text == "❌ Bekor qilish")
 @router.message(MasterCompletionState.waiting_for_amount, F.text == "❌ Bekor qilish")
@@ -304,15 +337,25 @@ async def cancel_master_fsm(message: Message, state: FSMContext) -> None:
 
 @router.message(MasterCompletionState.waiting_for_video, F.video_note | F.video)
 async def process_master_video(message: Message, state: FSMContext) -> None:
-    video_id = message.video_note.file_id if message.video_note else message.video.file_id
+    video_id = (
+        message.video_note.file_id if message.video_note else message.video.file_id
+    )
     await state.update_data(video_file_id=video_id)
     await state.set_state(MasterCompletionState.waiting_for_amount)
-    await message.answer("Video qabul qilindi. Endi xizmat summasini raqamlarda kiriting (masalan: 50000):", reply_markup=_cancel_kb())
+    await message.answer(
+        "✅ Video qabul qilindi!\n\n"
+        "Endi xizmat <b>summasini</b> raqamlarda kiriting (masalan: 50000):",
+        reply_markup=_cancel_kb(),
+        parse_mode="HTML",
+    )
 
 
 @router.message(MasterCompletionState.waiting_for_video)
 async def invalid_master_video(message: Message) -> None:
-    await message.answer("Iltimos, faqat video xabar (video note) yoki oddiy video yuboring.")
+    await message.answer(
+        "⚠️ Iltimos, faqat <b>video xabar (video note)</b> yoki oddiy video yuboring.",
+        parse_mode="HTML",
+    )
 
 
 @router.message(MasterCompletionState.waiting_for_amount)
@@ -321,16 +364,30 @@ async def process_master_amount(message: Message, state: FSMContext) -> None:
         await message.answer("Foydalanuvchi aniqlanmadi.")
         return
 
+    raw = (message.text or "").strip().replace(" ", "").replace(",", "")
     try:
-        amount = float((message.text or "").strip())
+        amount = float(raw)
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
     except ValueError:
-        await message.answer("Iltimos, summani raqamda kiriting (masalan: 50000).")
+        await message.answer(
+            "⚠️ Iltimos, summani faqat raqamlarda kiriting (masalan: 50000).",
+            reply_markup=_cancel_kb(),
+        )
         return
 
     data = await state.get_data()
     order_id = data.get("master_order_id")
     video_file_id = data.get("video_file_id")
     master_telegram_id = message.from_user.id
+
+    if not order_id:
+        await state.clear()
+        await message.answer(
+            "Xatolik: buyurtma ID topilmadi. Qayta /my_jobs buyrug'ini yuboring.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
 
     try:
         async with AsyncSessionFactory() as session:
@@ -342,14 +399,25 @@ async def process_master_amount(message: Message, state: FSMContext) -> None:
                 video_file_id=video_file_id,
                 final_amount=amount,
             )
-            ns = NotificationService(bot=message.bot, settings=get_settings())
+            ns = NotificationService(bot=message.bot, settings=settings)
+            # Notify client
             await ns.notify_client_status_change(order, order.status)
+            # Notify dispatcher with video + confirm button
             master_name = message.from_user.full_name or str(master_telegram_id)
             await ns.notify_dispatcher_completion_review(order, master_name)
     except Exception as exc:
         logger.exception("Master completion failed for order #%s: %s", order_id, exc)
-        await message.answer(f"Xatolik yuz berdi: {exc}")
+        await message.answer(
+            f"❌ Xatolik yuz berdi: {exc}\n\nQayta urinib ko'ring yoki dispatcher bilan bog'laning.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         return
 
     await state.clear()
-    await message.answer(f"✅ Buyurtma #{order_id} yakunlandi. Ma'lumotlar dispecherga yuborildi. Tasdiqlanishi kutilmoqda.", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        f"✅ <b>Buyurtma #{order_id}</b> yakunlandi!\n\n"
+        f"💰 Summa: <b>{amount:,.0f} so'm</b>\n\n"
+        "Ma'lumotlar dispecherga yuborildi. Tasdiqlanishi kutilmoqda. 🙏",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="HTML",
+    )
