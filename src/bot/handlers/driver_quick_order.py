@@ -8,7 +8,7 @@ import logging
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InaccessibleMessage, Message
+from aiogram.types import CallbackQuery, InaccessibleMessage, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select
 
 from src.bot.keyboards.driver import (
@@ -34,6 +34,7 @@ from src.db.models.user import User
 from src.db.session import AsyncSessionFactory
 from src.services.notification_service import NotificationService
 from src.services.order_service import DriverOrderPayload, OrderService
+from src.db.enums import OrderStatus
 
 logger = logging.getLogger(__name__)
 router = Router(name="driver_quick_order")
@@ -291,13 +292,77 @@ async def cmd_my_orders(message: Message, state: FSMContext) -> None:
         await message.answer(_t(lang, "no_orders"))
         return
 
-    lines = [_t(lang, "orders_header")]
+    active_statuses = {
+        OrderStatus.NEW, OrderStatus.ASSIGNED, OrderStatus.ACCEPTED,
+        OrderStatus.ON_THE_WAY, OrderStatus.ARRIVED, OrderStatus.IN_PROGRESS
+    }
+
+    history_lines = [_t(lang, "orders_header")]
+    has_history = False
+
     for o in orders:
-        lines.append(
-            f"• #{o.id} — <b>{o.status.name}</b> — {o.issue_label} — "
-            f"{o.created_at.strftime('%H:%M %d.%m')}"
-        )
-    await message.answer("\n".join(lines), parse_mode="HTML")
+        text = f"• #{o.id} — <b>{o.status.name}</b> — {o.issue_label} — {o.created_at.strftime('%H:%M %d.%m')}"
+        if o.status in active_statuses:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"client_cancel:{o.id}")
+            ]])
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        else:
+            history_lines.append(text)
+            has_history = True
+
+    if has_history:
+        await message.answer("\n".join(history_lines), parse_mode="HTML")
+
+@router.callback_query(F.data.startswith("client_cancel:"))
+async def cb_client_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    order_id_str = callback.data.split(":")[1]
+    order_id = int(order_id_str)
+    
+    lang = await _get_lang(state, callback.from_user.id)
+    
+    async with AsyncSessionFactory() as session:
+        service = OrderService(session)
+        ns = NotificationService(bot=callback.bot, settings=settings)
+        try:
+            # Need to get assigned master before cancelling
+            order = await service.get_order(order_id)
+            master_id = order.assigned_master_telegram_id
+            
+            await service.client_cancel_order(order_id, callback.from_user.id)
+            
+            await callback.message.edit_text(
+                f"❌ Buyurtma #{order_id} bekor qilindi.",
+                reply_markup=None
+            )
+            await callback.answer("Bekor qilindi", show_alert=True)
+            
+            # Notify dispatcher
+            if settings.resolved_dispatcher_chat_id:
+                try:
+                    await callback.bot.send_message(
+                        chat_id=settings.resolved_dispatcher_chat_id,
+                        text=f"⚠️ <b>Mijoz buyurtmani bekor qildi:</b> #{order_id}",
+                        parse_mode="HTML"
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to notify dispatcher of client cancel: %s", exc)
+                    
+            # Notify master if assigned
+            if master_id:
+                try:
+                    await callback.bot.send_message(
+                        chat_id=master_id,
+                        text=f"⚠️ <b>Mijoz buyurtmani bekor qildi:</b> #{order_id}\nBoshqa buyurtmalarni kutishingiz mumkin.",
+                        parse_mode="HTML"
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to notify master of client cancel: %s", exc)
+                    
+        except Exception as exc:
+            logger.error("Client cancel error: %s", exc)
+            await callback.answer("Xatolik yuz berdi. Balki buyurtma allaqachon yopilgan.", show_alert=True)
+
 
 
 # ── Start order ───────────────────────────────────────────────────────────────

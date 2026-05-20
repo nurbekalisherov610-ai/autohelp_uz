@@ -132,7 +132,7 @@ async def run_scheduler() -> None:
         timezone=settings.timezone,
         job_defaults={"coalesce": True, "max_instances": 1},
     )
-    scheduler.add_job(sla_watchdog, "interval", minutes=1, kwargs={"bot": bot}, id="sla_watchdog")
+    scheduler.add_job(sla_watchdog, "interval", minutes=15, kwargs={"bot": bot}, id="sla_watchdog")
     scheduler.add_job(daily_backup_report, "interval", hours=24, id="backup_monitor")
     scheduler.add_job(stats_report_tick, "cron", hour=23, minute=59, kwargs={"bot": bot}, id="stats_report")
     scheduler.start()

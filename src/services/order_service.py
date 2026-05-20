@@ -316,6 +316,38 @@ class OrderService:
             to_status=OrderStatus.CANCELLED,
             actor_telegram_id=order.assigned_dispatcher_telegram_id or 0,
         )
+    async def client_cancel_order(self, order_id: int, client_telegram_id: int) -> Order:
+        """Client cancels their own order."""
+        order = await self.get_order(order_id)
+        if order.client_id != (await self.session.scalar(select(User.id).where(User.telegram_id == client_telegram_id))):
+            raise OrderPermissionDeniedError(f"Client {client_telegram_id} cannot cancel order #{order_id}")
+        
+        if order.status in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
+            raise InvalidOrderTransitionError(f"Order #{order_id} is already {order.status.name}")
+            
+        return await self._change_status(
+            order,
+            to_status=OrderStatus.CANCELLED,
+            actor_telegram_id=client_telegram_id,
+        )
+
+    async def master_drop_order(self, order_id: int, master_telegram_id: int) -> Order:
+        """Master drops an order due to emergency, reverts to NEW."""
+        order = await self.get_order(order_id)
+        if order.assigned_master_telegram_id != master_telegram_id:
+            raise OrderPermissionDeniedError(f"Master {master_telegram_id} cannot drop order #{order_id}")
+            
+        if order.status in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
+            raise InvalidOrderTransitionError(f"Order #{order_id} is already {order.status.name}")
+            
+        # Revert back to NEW, clear the assigned master but keep dispatcher who assigned it (or clear both)
+        order.assigned_master_telegram_id = None
+        
+        return await self._change_status(
+            order,
+            to_status=OrderStatus.NEW,
+            actor_telegram_id=master_telegram_id,
+        )
 
     async def save_feedback(
         self,

@@ -493,6 +493,7 @@ async def cb_cancel_order(callback: CallbackQuery) -> None:
             client_telegram_id = client.telegram_id if client else None
             client_language = client.language if client else None
             _order_id = order.id
+            master_id = order.assigned_master_telegram_id
 
         ns = NotificationService(bot=callback.bot, settings=settings)
         if client_telegram_id:
@@ -502,6 +503,16 @@ async def cb_cancel_order(callback: CallbackQuery) -> None:
                 client_language=client_language,
                 status=OrderStatus.CANCELLED,
             )
+            
+        if master_id:
+            try:
+                await callback.bot.send_message(
+                    chat_id=master_id,
+                    text=f"⚠️ <b>Dispetcher buyurtmani bekor qildi!</b>\nID: #{_order_id}\nIltimos, boshqa buyurtmalarni kuting.",
+                    parse_mode="HTML"
+                )
+            except Exception as exc:
+                logger.warning("Failed to notify master of dispatcher cancel: %s", exc)
     except Exception as exc:
         # Graceful check for double-tap race conditions
         try:

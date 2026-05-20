@@ -60,7 +60,7 @@ def _next_kb(order_id: int, status: OrderStatus) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=label, callback_data=f"master_status:{order_id}:{alias}")],
-            [InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"master_cancel:{order_id}")]
+            [InlineKeyboardButton(text="⚠️ Muammo (Rad etish)", callback_data=f"master_cancel:{order_id}")]
         ]
     )
 
@@ -341,32 +341,39 @@ async def cb_cancel(callback: CallbackQuery) -> None:
     try:
         async with AsyncSessionFactory() as session:
             service = OrderService(session)
-            order = await service.master_transition(
+            order = await service.master_drop_order(
                 order_id=order_id,
                 master_telegram_id=callback.from_user.id,
-                to_status=OrderStatus.CANCELLED,
             )
             client = await session.scalar(select(User).where(User.id == order.client_id))
             client_telegram_id = client.telegram_id if client else None
-            client_language = client.language if client else None
             _order_id = order.id
+            master_name = callback.from_user.full_name or callback.from_user.first_name
 
         ns = NotificationService(bot=callback.bot, settings=settings)
+        # Notify dispatchers that master dropped the order
+        if settings.resolved_dispatcher_chat_id:
+            await callback.bot.send_message(
+                chat_id=settings.resolved_dispatcher_chat_id,
+                text=f"⚠️ <b>Usta {master_name}</b> buyurtmani oxiriga yetkaza olmadi!\nID: #{_order_id}\nIltimos, boshqa usta biriktiring.",
+                parse_mode="HTML"
+            )
+            
+        # Notify client that searching for another master
         if client_telegram_id:
-            await ns.notify_client_status_change(
-                order_id=_order_id,
-                client_telegram_id=client_telegram_id,
-                client_language=client_language,
-                status=OrderStatus.CANCELLED,
+            await callback.bot.send_message(
+                chat_id=client_telegram_id,
+                text="⚠️ Usta yetib kela olmadi. Boshqa usta qidirilmoqda...",
+                parse_mode="HTML"
             )
     except Exception as exc:
         # Graceful double-tap check
         try:
             async with AsyncSessionFactory() as session:
                 order = await session.scalar(select(Order).where(Order.id == order_id))
-                if order and order.status == OrderStatus.CANCELLED:
+                if order and order.status == OrderStatus.NEW:
                     _order_id = order.id
-                    logger.info("cb_cancel: order %s already cancelled, ignoring error", order_id)
+                    logger.info("cb_cancel: order %s already dropped, ignoring error", order_id)
                 else:
                     raise exc
         except Exception:
