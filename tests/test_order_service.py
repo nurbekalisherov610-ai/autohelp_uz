@@ -229,3 +229,18 @@ async def test_dispatcher_complete_requires_amount(session):
             OrderStatus.COMPLETED,
             final_amount=None,
         )
+
+
+def test_parse_uzbek_amount():
+    from src.bot.handlers.master_orders import parse_uzbek_amount
+
+    assert parse_uzbek_amount("150 000") == 150000.0
+    assert parse_uzbek_amount("150000 so'm") == 150000.0
+    assert parse_uzbek_amount("150k") == 150000.0
+    assert parse_uzbek_amount("150 ming") == 150000.0
+    assert parse_uzbek_amount("1.5 mln") == 1500000.0
+    assert parse_uzbek_amount("1,5 mln") == 1500000.0
+    assert parse_uzbek_amount("150,000") == 150000.0
+    assert parse_uzbek_amount("150.000") == 150000.0
+    assert parse_uzbek_amount("abc") is None
+

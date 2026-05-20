@@ -38,8 +38,8 @@ _CLIENT_TEXT: dict[str, dict[str, str]] = {
         "ru": "📍 Заявка #{id}: Мастер прибыл на место!",
     },
     "in_progress": {
-        "uz": "🛠 Buyurtma #{id}: Usta ta'mirlashni boshladi.",
-        "ru": "🛠 Заявка #{id}: Мастер приступил к работе.",
+        "uz": "🛠 Buyurtma #{id}: Usta yetib keldi va ishni boshladi.",
+        "ru": "🛠 Заявка #{id}: Мастер прибыл и приступил к работе.",
     },
     "cancelled": {
         "uz": "🚫 Buyurtma #{id} bekor qilindi.",
@@ -383,4 +383,36 @@ class NotificationService:
                     "Failed to notify dispatcher %s of master action %s on order #%s: %s",
                     target, action, order_id, exc
                 )
+
+    async def notify_dispatcher_master_status_change(
+        self,
+        *,
+        order_id: int,
+        master_name: str,
+        status: OrderStatus,
+    ) -> None:
+        """Broadcast real-time status update to all dispatchers when master starts moving or arrives."""
+        emoji = "🚗" if status == OrderStatus.ON_THE_WAY else "🛠"
+        status_uz = "yo'lga chiqdi" if status == OrderStatus.ON_THE_WAY else "yetib keldi va ishni boshladi"
+        
+        text = (
+            f"{emoji} <b>👨‍🔧 Usta {master_name}</b>:\n"
+            f"🆔 Buyurtma: <b>#{order_id}</b>\n"
+            f"Holat: <b>{status_uz.capitalize()}</b>"
+        )
+        
+        targets = self._broadcast_targets()
+        for target in targets:
+            try:
+                await self.bot.send_message(
+                    chat_id=target,
+                    text=text,
+                    parse_mode="HTML"
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to notify dispatcher %s of status %s on order #%s: %s",
+                    target, status, order_id, exc
+                )
+
 

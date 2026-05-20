@@ -49,6 +49,7 @@ def _master_label(master_id: int) -> str:
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 @router.message(Command("dashboard"))
+@router.message(F.text == "📊 Boshqaruv paneli")
 async def cmd_dashboard(message: Message) -> None:
     uid = message.from_user.id if message.from_user else None
     if not is_dispatcher(uid, message.chat.id):
@@ -77,6 +78,7 @@ async def cmd_dashboard(message: Message) -> None:
 
 
 @router.message(Command("new_orders"))
+@router.message(F.text == "🆕 Yangi buyurtmalar")
 async def cmd_new_orders(message: Message) -> None:
     uid = message.from_user.id if message.from_user else None
     if not is_dispatcher(uid, message.chat.id):
@@ -110,6 +112,7 @@ async def cmd_new_orders(message: Message) -> None:
 
 
 @router.message(Command("active_orders"))
+@router.message(F.text == "⏳ Faol buyurtmalar")
 async def cmd_active_orders(message: Message) -> None:
     uid = message.from_user.id if message.from_user else None
     if not is_dispatcher(uid, message.chat.id):

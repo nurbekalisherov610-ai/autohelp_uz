@@ -152,3 +152,34 @@ def confirm_keyboard(language: str | None = None) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=button("cancel", language), callback_data="order_cancel")],
         ]
     )
+
+
+def admin_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Boshqaruv paneli"), KeyboardButton(text="🆕 Yangi buyurtmalar")],
+            [KeyboardButton(text="⏳ Faol buyurtmalar"), KeyboardButton(text="👨‍🔧 Masterlar ro'yxati")],
+            [KeyboardButton(text="📥 Buyurtmalar eksporti"), KeyboardButton(text="👥 Foydalanuvchilar")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def dispatcher_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Boshqaruv paneli"), KeyboardButton(text="🆕 Yangi buyurtmalar")],
+            [KeyboardButton(text="⏳ Faol buyurtmalar")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def master_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📦 Mening buyurtmalarim")],
+        ],
+        resize_keyboard=True,
+    )
+

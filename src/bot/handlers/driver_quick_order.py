@@ -23,8 +23,12 @@ from src.bot.keyboards.driver import (
     request_location_keyboard,
     request_phone_keyboard,
     start_keyboard,
+    admin_keyboard,
+    dispatcher_keyboard,
+    master_keyboard,
 )
 from src.bot.states.driver_order import DriverQuickOrderState
+from src.bot.utils.permissions import is_admin, is_dispatcher, is_master
 from src.core.config import get_settings
 from src.db.models.user import User
 from src.db.session import AsyncSessionFactory
@@ -149,6 +153,46 @@ async def _get_lang(state: FSMContext, user_id: int) -> str:
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
+    uid = message.from_user.id if message.from_user else None
+    
+    # Check if the user is registered as master in database
+    is_db_master = False
+    try:
+        async with AsyncSessionFactory() as session:
+            user = await session.scalar(select(User).where(User.telegram_id == uid))
+            if user and user.is_master:
+                is_db_master = True
+    except Exception as exc:
+        logger.error("DB check failed in start: %s", exc)
+
+    if is_admin(uid):
+        await message.answer(
+            "👑 <b>Admin boshqaruv paneli</b>\n\n"
+            "Siz tizimda <b>Admin</b> roliga egasiz. Quyidagi tugmalar orqali botni boshqarishingiz va hisobotlarni olishingiz mumkin:",
+            reply_markup=admin_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    if is_dispatcher(uid):
+        await message.answer(
+            "📞 <b>Dispetcher boshqaruv paneli</b>\n\n"
+            "Siz tizimda <b>Dispetcher</b> roliga egasiz. Quyidagi tugmalar orqali buyurtmalarni ko'rishingiz va taqsimlashingiz mumkin:",
+            reply_markup=dispatcher_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    if is_master(uid) or is_db_master:
+        await message.answer(
+            "👨‍🔧 <b>Master boshqaruv paneli</b>\n\n"
+            "Siz tizimda <b>Master</b> roliga egasiz. Quyidagi tugma orqali sizga biriktirilgan buyurtmalarni boshqarishingiz mumkin:",
+            reply_markup=master_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    # Normal driver client flow
     await state.set_state(DriverQuickOrderState.language)
     await message.answer(
         "🌐 Tilni tanlang / Выберите язык:",

@@ -42,7 +42,7 @@ ISSUE_LABEL_TO_TYPE: dict[str, IssueType] = {
 MASTER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.ASSIGNED: {OrderStatus.ACCEPTED, OrderStatus.REJECTED},
     OrderStatus.ACCEPTED: {OrderStatus.ON_THE_WAY, OrderStatus.CANCELLED},
-    OrderStatus.ON_THE_WAY: {OrderStatus.ARRIVED, OrderStatus.CANCELLED},
+    OrderStatus.ON_THE_WAY: {OrderStatus.ARRIVED, OrderStatus.IN_PROGRESS, OrderStatus.CANCELLED},
     OrderStatus.ARRIVED: {OrderStatus.IN_PROGRESS, OrderStatus.CANCELLED},
     OrderStatus.IN_PROGRESS: {OrderStatus.COMPLETED, OrderStatus.CANCELLED},
 }

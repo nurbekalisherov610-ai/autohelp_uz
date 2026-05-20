@@ -50,8 +50,7 @@ def _safe_msg(cb: CallbackQuery) -> Message | None:
 def _next_kb(order_id: int, status: OrderStatus) -> InlineKeyboardMarkup | None:
     NEXT: dict[OrderStatus, tuple[str, str]] = {
         OrderStatus.ACCEPTED: ("🚗 Yo'lga chiqdim", "on_the_way"),
-        OrderStatus.ON_THE_WAY: ("📍 Yetib keldim", "arrived"),
-        OrderStatus.ARRIVED: ("🛠 Ishni boshladim", "in_progress"),
+        OrderStatus.ON_THE_WAY: ("📍 Yetib keldim va ishni boshladim", "in_progress"),
         OrderStatus.IN_PROGRESS: ("✅ Ishni tugatdim", "completed"),
     }
     entry = NEXT.get(status)
@@ -74,9 +73,69 @@ def _cancel_kb() -> ReplyKeyboardMarkup:
     )
 
 
+def parse_uzbek_amount(text: str) -> float | None:
+    """
+    Intelligently parses Uzbek sum values from text.
+    Handles space/period/comma thousands separators.
+    Handles 'k', 'ming', 'тыс' (thousands) and 'mln', 'млн' (millions) suffixes.
+    Example:
+      "150 000" -> 150000.0
+      "150k" -> 150000.0
+      "150 ming" -> 150000.0
+      "1.5 mln" -> 1500000.0
+    """
+    text = text.lower().strip()
+    
+    # Remove common currency tags
+    for cur in ["so'm", "som", "сум", "сўм", "y", "у.е.", "usd", "$"]:
+        text = text.replace(cur, "")
+    text = text.strip()
+    
+    if not text:
+        return None
+
+    # Check million
+    is_million = False
+    for suffix in ["mln", "миллион", "млн"]:
+        if suffix in text:
+            is_million = True
+            text = text.replace(suffix, "").strip()
+            break
+
+    # Check thousand
+    is_thousand = False
+    for suffix in ["ming", "тыс", "тысяч", "k", "к"]:
+        if suffix in text:
+            is_thousand = True
+            text = text.replace(suffix, "").strip()
+            break
+
+    # Standardize thousands separator or decimals
+    if is_million or is_thousand:
+        text = text.replace(",", ".")
+    else:
+        text = text.replace(" ", "").replace(",", "").replace(".", "")
+
+    text = text.replace(" ", "")
+
+    try:
+        cleaned = "".join(c for c in text if c.isdigit() or c == ".")
+        if not cleaned:
+            return None
+        val = float(cleaned)
+        if is_million:
+            val *= 1_000_000
+        elif is_thousand:
+            val *= 1_000
+        return val
+    except ValueError:
+        return None
+
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 @router.message(Command("my_jobs"))
+@router.message(F.text == "📦 Mening buyurtmalarim")
 async def cmd_my_jobs(message: Message) -> None:
     if not message.from_user:
         return
@@ -382,6 +441,13 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
                 client_language=client_language,
                 status=_status,
             )
+        
+        master_name = settings.parsed_master_labels_map.get(callback.from_user.id) or callback.from_user.full_name or str(callback.from_user.id)
+        await ns.notify_dispatcher_master_status_change(
+            order_id=_order_id,
+            master_name=master_name,
+            status=_status,
+        )
     except Exception as exc:
         # Graceful double-tap check
         try:
@@ -450,7 +516,7 @@ async def invalid_video(message: Message, state: FSMContext) -> None:
         from src.bot.handlers.driver_quick_order import cmd_start
         await cmd_start(message, state)
         return
-    if text == "/my_jobs":
+    if text in ("/my_jobs", "📦 Mening buyurtmalarim"):
         await state.clear()
         await cmd_my_jobs(message)
         return
@@ -478,19 +544,15 @@ async def process_amount(message: Message, state: FSMContext) -> None:
         from src.bot.handlers.driver_quick_order import cmd_start
         await cmd_start(message, state)
         return
-    if text == "/my_jobs":
+    if text in ("/my_jobs", "📦 Mening buyurtmalarim"):
         await state.clear()
         await cmd_my_jobs(message)
         return
 
-    raw = text.replace(" ", "").replace(",", "")
-    try:
-        amount = float(raw)
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
+    amount = parse_uzbek_amount(text)
+    if amount is None or amount <= 0:
         await message.answer(
-            "⚠️ Summani faqat raqamlarda kiriting (masalan: 50000).",
+            "⚠️ Summani to'g'ri formatda kiriting (masalan: 150 000, 150k, 1.5 mln yoki 150 ming so'm).",
             reply_markup=_cancel_kb(),
         )
         return

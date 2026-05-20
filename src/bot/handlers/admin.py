@@ -1,5 +1,5 @@
 """Admin command handler — accessible only by users listed in ADMIN_IDS or DISPATCHER_IDS."""
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy import func, select
@@ -98,6 +98,7 @@ async def cmd_admin(message: Message) -> None:
 
 
 @router.message(Command("admin_users"))
+@router.message(F.text == "👥 Foydalanuvchilar")
 async def cmd_admin_users(message: Message) -> None:
     if message.from_user is None or not _is_admin(message.from_user.id):
         await message.answer("⛔ Sizda bu buyruqdan foydalanish huquqi yo'q.")
@@ -123,6 +124,7 @@ async def cmd_admin_users(message: Message) -> None:
 
 
 @router.message(Command("admin_masters"))
+@router.message(F.text == "👨‍🔧 Masterlar ro'yxati")
 async def cmd_admin_masters(message: Message) -> None:
     if message.from_user is None or not _is_admin(message.from_user.id):
         await message.answer("⛔ Sizda bu buyruqdan foydalanish huquqi yo'q.")
@@ -167,6 +169,7 @@ from aiogram.types import BufferedInputFile
 from src.services.export_service import ExportImportService
 
 @router.message(Command("export_orders"))
+@router.message(F.text == "📥 Buyurtmalar eksporti")
 async def cmd_export_orders(message: Message) -> None:
     if message.from_user is None or not _is_admin(message.from_user.id):
         await message.answer("⛔ Sizda bu buyruqdan foydalanish huquqi yo'q.")
