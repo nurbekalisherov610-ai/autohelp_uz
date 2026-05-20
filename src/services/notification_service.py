@@ -308,7 +308,7 @@ class NotificationService:
         except Exception as exc:
             logger.error("Failed to notify master %s: %s", master_telegram_id, exc)
 
-    async def notify_dispatcher_completion_review(
+    async def notify_dispatcher_order_completed(
         self,
         *,
         order_id: int,
@@ -316,25 +316,14 @@ class NotificationService:
         video_file_id: str | None,
         master_name: str,
     ) -> None:
-        """Tell dispatchers master finished — show Confirm Payment button."""
+        """Tell dispatchers master finished."""
         amount_str = (
             f"{float(final_amount):,.0f} so'm" if final_amount else "Noma'lum"
         )
         text = (
-            f"✅ <b>{master_name}</b> ishni yakunladi.\n\n"
+            f"✅ <b>{master_name}</b> ishni to'liq yakunladi.\n\n"
             f"🆔 Buyurtma: <b>#{order_id}</b>\n"
-            f"💰 Summa: <b>{amount_str}</b>\n\n"
-            "To'lovni tasdiqlang:"
-        )
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="💰 To'lovni tasdiqlash",
-                        callback_data=f"dispatch_complete:{order_id}",
-                    )
-                ]
-            ]
+            f"💰 Summa: <b>{amount_str}</b>\n"
         )
 
         targets = self._broadcast_targets()
@@ -353,7 +342,7 @@ class NotificationService:
                             logger.error("Could not send video to %s: %s", target, ve)
 
                 await self.bot.send_message(
-                    chat_id=target, text=text, reply_markup=keyboard, parse_mode="HTML"
+                    chat_id=target, text=text, parse_mode="HTML"
                 )
             except Exception as exc:
                 logger.error(

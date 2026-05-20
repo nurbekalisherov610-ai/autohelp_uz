@@ -37,7 +37,7 @@ MASTER_STATUS_ALIASES: dict[str, OrderStatus] = {
     "on_the_way": OrderStatus.ON_THE_WAY,
     "arrived": OrderStatus.ARRIVED,
     "in_progress": OrderStatus.IN_PROGRESS,
-    "awaiting_confirm": OrderStatus.AWAITING_CONFIRM,
+    "completed": OrderStatus.COMPLETED,
 }
 
 
@@ -52,18 +52,17 @@ def _next_kb(order_id: int, status: OrderStatus) -> InlineKeyboardMarkup | None:
         OrderStatus.ACCEPTED: ("🚗 Yo'lga chiqdim", "on_the_way"),
         OrderStatus.ON_THE_WAY: ("📍 Yetib keldim", "arrived"),
         OrderStatus.ARRIVED: ("🛠 Ishni boshladim", "in_progress"),
-        OrderStatus.IN_PROGRESS: ("✅ Ishni tugatdim", "awaiting_confirm"),
+        OrderStatus.IN_PROGRESS: ("✅ Ishni tugatdim", "completed"),
     }
     entry = NEXT.get(status)
     if not entry:
         return None
     label, alias = entry
     return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(
-                text=label, callback_data=f"master_status:{order_id}:{alias}"
-            )
-        ]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"master_status:{order_id}:{alias}")],
+            [InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"master_cancel:{order_id}")]
+        ]
     )
 
 
@@ -236,6 +235,51 @@ async def cb_reject(callback: CallbackQuery) -> None:
     await callback.answer("Rad etildi.")
 
 
+@router.callback_query(F.data.startswith("master_cancel:"))
+async def cb_cancel(callback: CallbackQuery) -> None:
+    try:
+        order_id = int((callback.data or "").split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    try:
+        async with AsyncSessionFactory() as session:
+            service = OrderService(session)
+            order = await service.master_transition(
+                order_id=order_id,
+                master_telegram_id=callback.from_user.id,
+                to_status=OrderStatus.CANCELLED,
+            )
+            client = await session.scalar(select(User).where(User.id == order.client_id))
+            client_telegram_id = client.telegram_id if client else None
+            client_language = client.language if client else None
+            _order_id = order.id
+
+        ns = NotificationService(bot=callback.bot, settings=settings)
+        if client_telegram_id:
+            await ns.notify_client_status_change(
+                order_id=_order_id,
+                client_telegram_id=client_telegram_id,
+                client_language=client_language,
+                status=OrderStatus.CANCELLED,
+            )
+    except Exception as exc:
+        logger.exception("master_cancel error for #%s: %s", order_id, exc)
+        await callback.answer(str(exc)[:200], show_alert=True)
+        return
+
+    msg = _safe_msg(callback)
+    if msg:
+        try:
+            await msg.edit_text(
+                f"❌ Buyurtma <b>#{_order_id}</b> bekor qilindi.", parse_mode="HTML"
+            )
+        except TelegramBadRequest:
+            pass
+    await callback.answer("Bekor qilindi.")
+
+
 # ── Status progression ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("master_status:"))
@@ -254,20 +298,17 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     # Completion: collect video + amount via FSM first
-    if to_status == OrderStatus.AWAITING_CONFIRM:
+    if to_status == OrderStatus.COMPLETED:
         await state.update_data(master_order_id=order_id)
         await state.set_state(MasterCompletionState.waiting_for_video)
         msg = _safe_msg(callback)
         if msg:
-            try:
-                await msg.edit_text(
-                    f"📹 Buyurtma <b>#{order_id}</b> yakunlash:\n\n"
-                    "Xizmat jarayonidan qisqa <b>video xabar</b> yuboring:",
-                    parse_mode="HTML",
-                )
-            except TelegramBadRequest:
-                pass
-            await msg.answer("Bekor qilish:", reply_markup=_cancel_kb())
+            await msg.answer(
+                f"📹 Buyurtma <b>#{order_id}</b> yakunlash:\n\n"
+                "Xizmat jarayonidan qisqa <b>video xabar</b> yuboring:",
+                parse_mode="HTML",
+                reply_markup=_cancel_kb()
+            )
         await callback.answer()
         return
 
@@ -304,12 +345,15 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
         OrderStatus.ARRIVED: "📍 Yetib keldim",
         OrderStatus.IN_PROGRESS: "🛠 Ishlamoqda",
     }
+    
+    # If there is a next status, show the keyboard. Otherwise just text.
+    kb = _next_kb(_order_id, _status)
     msg = _safe_msg(callback)
     if msg:
         try:
             await msg.edit_text(
                 f"Buyurtma <b>#{_order_id}</b>\nStatus: <b>{labels.get(_status, _status.name)}</b>",
-                reply_markup=_next_kb(_order_id, _status),
+                reply_markup=kb,
                 parse_mode="HTML",
             )
         except TelegramBadRequest:
@@ -385,7 +429,7 @@ async def process_amount(message: Message, state: FSMContext) -> None:
             order = await service.master_transition(
                 order_id=order_id,
                 master_telegram_id=message.from_user.id,
-                to_status=OrderStatus.AWAITING_CONFIRM,
+                to_status=OrderStatus.COMPLETED,
                 video_file_id=video_file_id,
                 final_amount=amount,
             )
@@ -404,11 +448,11 @@ async def process_amount(message: Message, state: FSMContext) -> None:
                 order_id=_order_id,
                 client_telegram_id=client_telegram_id,
                 client_language=client_language,
-                status=OrderStatus.AWAITING_CONFIRM,
+                status=OrderStatus.COMPLETED,
             )
 
-        # Notify dispatcher with video + confirm button
-        await ns.notify_dispatcher_completion_review(
+        # Notify dispatcher that it is completed
+        await ns.notify_dispatcher_order_completed(
             order_id=_order_id,
             final_amount=float(_amount) if _amount else amount,
             video_file_id=_video,
@@ -425,9 +469,9 @@ async def process_amount(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.answer(
-        f"✅ <b>Buyurtma #{order_id}</b> yakunlandi!\n\n"
+        f"✅ <b>Buyurtma #{order_id}</b> to'liq yakunlandi!\n\n"
         f"💰 Summa: <b>{amount:,.0f} so'm</b>\n\n"
-        "Dispetcherga yuborildi. Tasdiq kutilmoqda. 🙏",
+        "Xizmat uchun rahmat! 🙏",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode="HTML",
     )

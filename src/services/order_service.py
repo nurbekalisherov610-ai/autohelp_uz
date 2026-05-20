@@ -41,10 +41,10 @@ ISSUE_LABEL_TO_TYPE: dict[str, IssueType] = {
 
 MASTER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.ASSIGNED: {OrderStatus.ACCEPTED, OrderStatus.REJECTED},
-    OrderStatus.ACCEPTED: {OrderStatus.ON_THE_WAY},
-    OrderStatus.ON_THE_WAY: {OrderStatus.ARRIVED},
-    OrderStatus.ARRIVED: {OrderStatus.IN_PROGRESS},
-    OrderStatus.IN_PROGRESS: {OrderStatus.AWAITING_CONFIRM},
+    OrderStatus.ACCEPTED: {OrderStatus.ON_THE_WAY, OrderStatus.CANCELLED},
+    OrderStatus.ON_THE_WAY: {OrderStatus.ARRIVED, OrderStatus.CANCELLED},
+    OrderStatus.ARRIVED: {OrderStatus.IN_PROGRESS, OrderStatus.CANCELLED},
+    OrderStatus.IN_PROGRESS: {OrderStatus.COMPLETED, OrderStatus.CANCELLED},
 }
 
 DISPATCHER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
@@ -57,7 +57,7 @@ MASTER_ACTIVE_STATUSES = {
     OrderStatus.ON_THE_WAY,
     OrderStatus.ARRIVED,
     OrderStatus.IN_PROGRESS,
-    OrderStatus.AWAITING_CONFIRM,
+    OrderStatus.AWAITING_CONFIRM, # keeping for backwards compatibility if any old orders have this
 }
 
 
@@ -255,11 +255,12 @@ class OrderService:
                 f"Transition {order.status} → {to_status} is not allowed for master"
             )
 
-        if to_status == OrderStatus.AWAITING_CONFIRM:
+        if to_status == OrderStatus.COMPLETED:
             if video_file_id:
                 order.video_file_id = video_file_id
             if final_amount is not None:
                 order.final_amount = Decimal(str(final_amount))
+            order.completed_at = datetime.now(timezone.utc)
 
         return await self._change_status(
             order, to_status=to_status, actor_telegram_id=master_telegram_id
