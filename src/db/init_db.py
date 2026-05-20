@@ -168,5 +168,8 @@ async def _heal_order_status_history_table(engine_: AsyncEngine) -> None:
             "ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS actor_telegram_id BIGINT",
             "ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
             "ALTER TABLE order_status_history ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
+            # Drop legacy NOT NULL constraints so inserts don't fail
+            "ALTER TABLE order_status_history ALTER COLUMN new_status DROP NOT NULL",
+            "ALTER TABLE order_status_history ALTER COLUMN old_status DROP NOT NULL",
         ],
     )
