@@ -123,21 +123,8 @@ class NotificationService:
         """
         lang = normalize_language(language)
 
-        # Immediate text confirmation
-        try:
-            await self.bot.send_message(
-                chat_id=client_telegram_id,
-                text=(
-                    f"✅ <b>Buyurtma #{order_id} qabul qilindi!</b>\n\n"
-                    "Dispecher tez orada siz bilan bog'lanadi. 🙏"
-                    if lang == "uz" else
-                    f"✅ <b>Заявка #{order_id} принята!</b>\n\n"
-                    "Диспетчер скоро свяжется с вами. 🙏"
-                ),
-                parse_mode="HTML",
-            )
-        except Exception as exc:
-            logger.error("Failed to send confirmation text to %s: %s", client_telegram_id, exc)
+        # The text confirmation is handled by the handler's msg.edit_text()
+        # We only need to start the delayed video task.
 
         # Delayed video note — background task, never blocks the handler
         task = asyncio.create_task(
