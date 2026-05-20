@@ -49,7 +49,7 @@ async def _send_dispatcher_alert(bot: Bot | None, text: str) -> None:
 
 async def sla_watchdog(bot: Bot | None) -> None:
     try:
-        assigned_stale = await _fetch_stale_orders(OrderStatus.ASSIGNED, threshold_minutes=5)
+        assigned_stale = await _fetch_stale_orders(OrderStatus.ASSIGNED, threshold_minutes=15)
         on_the_way_stale = await _fetch_stale_orders(OrderStatus.ON_THE_WAY, threshold_minutes=60)
 
         if not (assigned_stale or on_the_way_stale):
@@ -57,7 +57,7 @@ async def sla_watchdog(bot: Bot | None) -> None:
 
         lines = ["SLA ogohlantirish:"]
         if assigned_stale:
-            lines.append("ASSIGNED > 5 min:")
+            lines.append("ASSIGNED > 15 min:")
             lines.extend(f" - #{order.id}" for order in assigned_stale)
 
         if on_the_way_stale:
@@ -132,7 +132,7 @@ async def run_scheduler() -> None:
         timezone=settings.timezone,
         job_defaults={"coalesce": True, "max_instances": 1},
     )
-    scheduler.add_job(sla_watchdog, "interval", minutes=15, kwargs={"bot": bot}, id="sla_watchdog")
+    scheduler.add_job(sla_watchdog, "interval", minutes=30, kwargs={"bot": bot}, id="sla_watchdog")
     scheduler.add_job(daily_backup_report, "interval", hours=24, id="backup_monitor")
     scheduler.add_job(stats_report_tick, "cron", hour=23, minute=59, kwargs={"bot": bot}, id="stats_report")
     scheduler.start()
