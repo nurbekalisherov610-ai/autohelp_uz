@@ -392,8 +392,12 @@ class NotificationService:
         status: OrderStatus,
     ) -> None:
         """Broadcast real-time status update to all dispatchers when master starts moving or arrives."""
-        emoji = "🚗" if status == OrderStatus.ON_THE_WAY else "🛠"
-        status_uz = "yo'lga chiqdi" if status == OrderStatus.ON_THE_WAY else "yetib keldi va ishni boshladi"
+        _status_info: dict[OrderStatus, tuple[str, str]] = {
+            OrderStatus.ON_THE_WAY: ("🚗", "yo'lga chiqdi"),
+            OrderStatus.ARRIVED: ("📍", "yetib keldi"),
+            OrderStatus.IN_PROGRESS: ("🛠", "ishni boshladi"),
+        }
+        emoji, status_uz = _status_info.get(status, ("ℹ️", status.name))
         
         text = (
             f"{emoji} <b>👨‍🔧 Usta {master_name}</b>:\n"

@@ -54,15 +54,14 @@ def _next_kb(order_id: int, status: OrderStatus) -> InlineKeyboardMarkup | None:
         OrderStatus.IN_PROGRESS: ("✅ Ishni tugatdim", "completed"),
     }
     entry = NEXT.get(status)
-    if not entry:
-        return None
-    label, alias = entry
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=f"master_status:{order_id}:{alias}")],
-            [InlineKeyboardButton(text="⚠️ Muammo (Rad etish)", callback_data=f"master_cancel:{order_id}")]
-        ]
-    )
+    buttons: list[list[InlineKeyboardButton]] = []
+    if entry:
+        label, alias = entry
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"master_status:{order_id}:{alias}")])
+    # Always show the drop/cancel button for any active status
+    if status in (OrderStatus.ASSIGNED, OrderStatus.ACCEPTED, OrderStatus.ON_THE_WAY, OrderStatus.ARRIVED, OrderStatus.IN_PROGRESS):
+        buttons.append([InlineKeyboardButton(text="⚠️ Muammo (Rad etish)", callback_data=f"master_cancel:{order_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
 
 def _cancel_kb() -> ReplyKeyboardMarkup:
@@ -384,7 +383,7 @@ async def cb_cancel(callback: CallbackQuery) -> None:
     if msg:
         try:
             await msg.edit_text(
-                f"❌ Buyurtma <b>#{_order_id}</b> bekor qilindi.", parse_mode="HTML"
+                f"⚠️ Buyurtma <b>#{_order_id}</b> rad etildi va dispetcherga qaytarildi.", parse_mode="HTML"
             )
         except TelegramBadRequest:
             pass

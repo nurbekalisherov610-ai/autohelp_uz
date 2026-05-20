@@ -316,52 +316,59 @@ async def cmd_my_orders(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("client_cancel:"))
 async def cb_client_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    order_id_str = callback.data.split(":")[1]
-    order_id = int(order_id_str)
-    
-    lang = await _get_lang(state, callback.from_user.id)
-    
-    async with AsyncSessionFactory() as session:
-        service = OrderService(session)
-        ns = NotificationService(bot=callback.bot, settings=settings)
-        try:
-            # Need to get assigned master before cancelling
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
+    try:
+        order_id = int((callback.data or "").split(":")[1])
+    except (IndexError, ValueError):
+        return
+
+    try:
+        async with AsyncSessionFactory() as session:
+            service = OrderService(session)
+            # Get assigned master before cancelling
             order = await service.get_order(order_id)
             master_id = order.assigned_master_telegram_id
             
             await service.client_cancel_order(order_id, callback.from_user.id)
+
+        # Edit the original message
+        msg = _msg_safe(callback)
+        if msg:
+            try:
+                await msg.edit_text(
+                    f"❌ Buyurtma #{order_id} bekor qilindi.",
+                    reply_markup=None
+                )
+            except Exception:
+                pass
             
-            await callback.message.edit_text(
-                f"❌ Buyurtma #{order_id} bekor qilindi.",
-                reply_markup=None
-            )
-            await callback.answer("Bekor qilindi", show_alert=True)
-            
-            # Notify dispatcher
-            if settings.resolved_dispatcher_chat_id:
-                try:
-                    await callback.bot.send_message(
-                        chat_id=settings.resolved_dispatcher_chat_id,
-                        text=f"⚠️ <b>Mijoz buyurtmani bekor qildi:</b> #{order_id}",
-                        parse_mode="HTML"
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to notify dispatcher of client cancel: %s", exc)
-                    
-            # Notify master if assigned
-            if master_id:
-                try:
-                    await callback.bot.send_message(
-                        chat_id=master_id,
-                        text=f"⚠️ <b>Mijoz buyurtmani bekor qildi:</b> #{order_id}\nBoshqa buyurtmalarni kutishingiz mumkin.",
-                        parse_mode="HTML"
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to notify master of client cancel: %s", exc)
-                    
-        except Exception as exc:
-            logger.error("Client cancel error: %s", exc)
-            await callback.answer("Xatolik yuz berdi. Balki buyurtma allaqachon yopilgan.", show_alert=True)
+        # Notify dispatcher
+        if settings.resolved_dispatcher_chat_id:
+            try:
+                await callback.bot.send_message(
+                    chat_id=settings.resolved_dispatcher_chat_id,
+                    text=f"⚠️ <b>Mijoz buyurtmani bekor qildi:</b> #{order_id}",
+                    parse_mode="HTML"
+                )
+            except Exception as exc:
+                logger.warning("Failed to notify dispatcher of client cancel: %s", exc)
+                
+        # Notify master if assigned
+        if master_id:
+            try:
+                await callback.bot.send_message(
+                    chat_id=master_id,
+                    text=f"⚠️ <b>Mijoz buyurtmani bekor qildi:</b> #{order_id}\nBoshqa buyurtmalarni kutishingiz mumkin.",
+                    parse_mode="HTML"
+                )
+            except Exception as exc:
+                logger.warning("Failed to notify master of client cancel: %s", exc)
+                
+    except Exception as exc:
+        logger.error("Client cancel error: %s", exc)
+        await callback.answer("Xatolik yuz berdi. Balki buyurtma allaqachon yopilgan.", show_alert=True)
 
 
 

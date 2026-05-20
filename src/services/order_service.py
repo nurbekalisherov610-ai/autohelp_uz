@@ -319,7 +319,12 @@ class OrderService:
     async def client_cancel_order(self, order_id: int, client_telegram_id: int) -> Order:
         """Client cancels their own order."""
         order = await self.get_order(order_id)
-        if order.client_id != (await self.session.scalar(select(User.id).where(User.telegram_id == client_telegram_id))):
+        
+        # Verify the client owns this order
+        user_id = await self.session.scalar(
+            select(User.id).where(User.telegram_id == client_telegram_id)
+        )
+        if user_id is None or order.client_id != user_id:
             raise OrderPermissionDeniedError(f"Client {client_telegram_id} cannot cancel order #{order_id}")
         
         if order.status in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
