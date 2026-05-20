@@ -142,6 +142,7 @@ async def _heal_orders_table(engine_: AsyncEngine) -> None:
             # Legacy columns from old schema — drop NOT NULL so old rows don't block inserts
             "ALTER TABLE orders ALTER COLUMN order_uid DROP NOT NULL",
             "ALTER TABLE orders ALTER COLUMN user_id DROP NOT NULL",
+            "ALTER TABLE orders ALTER COLUMN problem_type DROP NOT NULL",
             "ALTER TABLE orders ALTER COLUMN description DROP NOT NULL",
             "ALTER TABLE orders ALTER COLUMN car_make DROP NOT NULL",
             "ALTER TABLE orders ALTER COLUMN car_model DROP NOT NULL",
