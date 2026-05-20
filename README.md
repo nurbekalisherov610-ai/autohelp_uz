@@ -94,17 +94,14 @@ This verifies:
 5. Confirm order
 
 ## Dispatcher Commands
+- `/dashboard` - dispatcher stats summary
 - `/new_orders` - show NEW queue
-- Inline `Qabul qilish #ID` - move `NEW -> ASSIGNED`
-- `/assign_master <order_id> <master_telegram_id>` - attach master
-- `/complete_order <order_id> <summa>` - move `AWAITING_CONFIRM -> COMPLETED`
+- `/active_orders` - show active orders queue
+- `/order <order_id>` - view specific order details and assign/complete
 
 ## Master Commands
-- `/master_help`
-- `/my_jobs`
-- `/accept <order_id>` - `ASSIGNED -> ACCEPTED`
-- `/reject <order_id>` - `ASSIGNED -> REJECTED`
-- `/status <order_id> <on_the_way|arrived|in_progress|awaiting_confirm>`
+- `/register_master` - register as a master (auto-authorized or with code)
+- `/my_jobs` - view current active jobs assigned to you
 
 ## API Endpoints
 - `GET /health`
@@ -121,7 +118,6 @@ This verifies:
 - Dedicated async scheduler with SLA watchdog:
   - `ASSIGNED > 5 min`
   - `ON_THE_WAY > 60 min`
-  - `AWAITING_CONFIRM > 15 min`
 - Optional local fallback mode: SQLite + in-memory FSM (`USE_REDIS=false`) for quick setup/testing.
 
 ## Migrations

@@ -142,10 +142,12 @@ async def cmd_register_master(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("master_accept:"))
 async def cb_accept(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     try:
         order_id = int((callback.data or "").split(":")[1])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     try:
@@ -171,10 +173,26 @@ async def cb_accept(callback: CallbackQuery) -> None:
                 client_language=client_language,
                 status=OrderStatus.ACCEPTED,
             )
+        
+        master_name = settings.parsed_master_labels_map.get(callback.from_user.id) or callback.from_user.full_name or str(callback.from_user.id)
+        await ns.notify_dispatcher_master_action(
+            order_id=_order_id,
+            master_name=master_name,
+            action="accepted",
+        )
     except Exception as exc:
-        logger.exception("master_accept error for #%s: %s", order_id, exc)
-        await callback.answer(str(exc)[:200], show_alert=True)
-        return
+        # Graceful double-tap check
+        try:
+            async with AsyncSessionFactory() as session:
+                order = await session.scalar(select(Order).where(Order.id == order_id))
+                if order and order.status == OrderStatus.ACCEPTED and order.assigned_master_telegram_id == callback.from_user.id:
+                    _order_id = order.id
+                    logger.info("cb_accept: order %s already accepted by master %s, ignoring error", order_id, callback.from_user.id)
+                else:
+                    raise exc
+        except Exception:
+            logger.exception("master_accept error for #%s: %s", order_id, exc)
+            return
 
     msg = _safe_msg(callback)
     if msg:
@@ -187,15 +205,16 @@ async def cb_accept(callback: CallbackQuery) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer("✅ Qabul qilindi!")
 
 
 @router.callback_query(F.data.startswith("master_reject:"))
 async def cb_reject(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     try:
         order_id = int((callback.data or "").split(":")[1])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     try:
@@ -219,10 +238,26 @@ async def cb_reject(callback: CallbackQuery) -> None:
                 client_language=client_language,
                 status=OrderStatus.REJECTED,
             )
+
+        master_name = settings.parsed_master_labels_map.get(callback.from_user.id) or callback.from_user.full_name or str(callback.from_user.id)
+        await ns.notify_dispatcher_master_action(
+            order_id=_order_id,
+            master_name=master_name,
+            action="rejected",
+        )
     except Exception as exc:
-        logger.exception("master_reject error for #%s: %s", order_id, exc)
-        await callback.answer(str(exc)[:200], show_alert=True)
-        return
+        # Graceful double-tap check
+        try:
+            async with AsyncSessionFactory() as session:
+                order = await session.scalar(select(Order).where(Order.id == order_id))
+                if order and order.status == OrderStatus.REJECTED:
+                    _order_id = order.id
+                    logger.info("cb_reject: order %s already rejected, ignoring error", order_id)
+                else:
+                    raise exc
+        except Exception:
+            logger.exception("master_reject error for #%s: %s", order_id, exc)
+            return
 
     msg = _safe_msg(callback)
     if msg:
@@ -232,15 +267,16 @@ async def cb_reject(callback: CallbackQuery) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer("Rad etildi.")
 
 
 @router.callback_query(F.data.startswith("master_cancel:"))
 async def cb_cancel(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     try:
         order_id = int((callback.data or "").split(":")[1])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     try:
@@ -265,9 +301,18 @@ async def cb_cancel(callback: CallbackQuery) -> None:
                 status=OrderStatus.CANCELLED,
             )
     except Exception as exc:
-        logger.exception("master_cancel error for #%s: %s", order_id, exc)
-        await callback.answer(str(exc)[:200], show_alert=True)
-        return
+        # Graceful double-tap check
+        try:
+            async with AsyncSessionFactory() as session:
+                order = await session.scalar(select(Order).where(Order.id == order_id))
+                if order and order.status == OrderStatus.CANCELLED:
+                    _order_id = order.id
+                    logger.info("cb_cancel: order %s already cancelled, ignoring error", order_id)
+                else:
+                    raise exc
+        except Exception:
+            logger.exception("master_cancel error for #%s: %s", order_id, exc)
+            return
 
     msg = _safe_msg(callback)
     if msg:
@@ -277,24 +322,24 @@ async def cb_cancel(callback: CallbackQuery) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer("Bekor qilindi.")
 
 
 # ── Status progression ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("master_status:"))
 async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     try:
         parts = (callback.data or "").split(":")
         order_id = int(parts[1])
         alias = parts[2]
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     to_status = MASTER_STATUS_ALIASES.get(alias)
     if not to_status:
-        await callback.answer("Noto'g'ri status.", show_alert=True)
         return
 
     # Completion: collect video + amount via FSM first
@@ -303,13 +348,15 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
         await state.set_state(MasterCompletionState.waiting_for_video)
         msg = _safe_msg(callback)
         if msg:
-            await msg.answer(
-                f"📹 Buyurtma <b>#{order_id}</b> yakunlash:\n\n"
-                "Xizmat jarayonidan qisqa <b>video xabar</b> yuboring:",
-                parse_mode="HTML",
-                reply_markup=_cancel_kb()
-            )
-        await callback.answer()
+            try:
+                await msg.answer(
+                    f"📹 Buyurtma <b>#{order_id}</b> yakunlash:\n\n"
+                    "Xizmat jarayonidan qisqa <b>video xabar</b> yuboring:",
+                    parse_mode="HTML",
+                    reply_markup=_cancel_kb()
+                )
+            except Exception:
+                pass
         return
 
     # All other transitions: immediate
@@ -336,9 +383,19 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
                 status=_status,
             )
     except Exception as exc:
-        logger.exception("master_status error #%s %s: %s", order_id, alias, exc)
-        await callback.answer(str(exc)[:200], show_alert=True)
-        return
+        # Graceful double-tap check
+        try:
+            async with AsyncSessionFactory() as session:
+                order = await session.scalar(select(Order).where(Order.id == order_id))
+                if order and order.status == to_status:
+                    _order_id = order.id
+                    _status = order.status
+                    logger.info("cb_master_status: order %s already transitioned to status %s, ignoring error", order_id, to_status)
+                else:
+                    raise exc
+        except Exception:
+            logger.exception("master_status error #%s %s: %s", order_id, alias, exc)
+            return
 
     labels = {
         OrderStatus.ON_THE_WAY: "🚗 Yo'lda",
@@ -358,7 +415,6 @@ async def cb_master_status(callback: CallbackQuery, state: FSMContext) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer("Status yangilandi!")
 
 
 # ── FSM: video submission ─────────────────────────────────────────────────────
@@ -383,7 +439,22 @@ async def process_video(message: Message, state: FSMContext) -> None:
 
 
 @router.message(MasterCompletionState.waiting_for_video)
-async def invalid_video(message: Message) -> None:
+async def invalid_video(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if text == "/cancel":
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
+        return
+    if text == "/start":
+        await state.clear()
+        from src.bot.handlers.driver_quick_order import cmd_start
+        await cmd_start(message, state)
+        return
+    if text == "/my_jobs":
+        await state.clear()
+        await cmd_my_jobs(message)
+        return
+
     await message.answer(
         "⚠️ Iltimos, <b>video xabar</b> yoki video yuboring.",
         parse_mode="HTML",
@@ -397,7 +468,22 @@ async def process_amount(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
 
-    raw = (message.text or "").strip().replace(" ", "").replace(",", "")
+    text = (message.text or "").strip()
+    if text == "/cancel":
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
+        return
+    if text == "/start":
+        await state.clear()
+        from src.bot.handlers.driver_quick_order import cmd_start
+        await cmd_start(message, state)
+        return
+    if text == "/my_jobs":
+        await state.clear()
+        await cmd_my_jobs(message)
+        return
+
+    raw = text.replace(" ", "").replace(",", "")
     try:
         amount = float(raw)
         if amount <= 0:
@@ -421,7 +507,7 @@ async def process_amount(message: Message, state: FSMContext) -> None:
         )
         return
 
-    master_name = message.from_user.full_name or str(message.from_user.id)
+    master_name = settings.parsed_master_labels_map.get(message.from_user.id) or message.from_user.full_name or str(message.from_user.id)
 
     try:
         async with AsyncSessionFactory() as session:

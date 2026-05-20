@@ -51,9 +51,9 @@ def setup_dispatcher() -> tuple[Dispatcher, object]:
     dp = Dispatcher(storage=storage)
 
     # ── Middlewares ──────────────────────────────────────────────────────────
-    # Rate-limit: 1.5 s between messages, 0.3 s between callback taps
-    dp.message.middleware(ThrottlingMiddleware(rate_limit=1.5))
-    dp.callback_query.middleware(ThrottlingMiddleware(rate_limit=1.5))
+    # Rate-limit: 0.5 s between messages, 0.3 s between callback taps
+    dp.message.middleware(ThrottlingMiddleware(rate_limit=0.5))
+    dp.callback_query.middleware(ThrottlingMiddleware())
     # Shows "typing…" indicator during slow handlers
     dp.message.middleware(TypingMiddleware())
 

@@ -160,6 +160,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("language:"))
 async def cb_choose_language(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()  # Dismiss button spinner immediately
     lang = normalize_language((callback.data or "").split(":")[-1])
 
     # Persist language to DB
@@ -192,7 +193,6 @@ async def cb_choose_language(callback: CallbackQuery, state: FSMContext) -> None
         except Exception:
             pass
         await msg.answer(_t(lang, "main_menu"), reply_markup=start_keyboard(lang))
-    await callback.answer()
 
 
 # ── Cancel ────────────────────────────────────────────────────────────────────
@@ -274,9 +274,37 @@ async def start_quick_order(message: Message, state: FSMContext) -> None:
 async def collect_issue(message: Message, state: FSMContext) -> None:
     lang = await _get_lang(state, message.from_user.id)
     issue = (message.text or "").strip()
-    if issue not in issue_options(lang):
-        await message.answer(_t(lang, "invalid_issue"), reply_markup=issue_keyboard(lang))
+
+    # Check if they clicked cancel or a menu command/button
+    if issue in CANCEL_BUTTONS or issue == "/cancel":
+        await state.clear()
+        await state.update_data(language=lang)
+        await message.answer(_t(lang, "cancelled"), reply_markup=start_keyboard(lang))
         return
+
+    if issue == "/start":
+        await cmd_start(message, state)
+        return
+
+    # If they typed/clicked something that matches other menu items, reset state and process it
+    for key, values in BUTTONS.items():
+        if issue in values.values():
+            await state.clear()
+            await state.update_data(language=lang)
+            if key == "start_order":
+                await start_quick_order(message, state)
+            elif key == "order_status":
+                await cmd_my_orders(message, state)
+            elif key == "about":
+                await cmd_about(message, state)
+            elif key == "change_lang":
+                await cmd_change_lang(message, state)
+            return
+
+    # If the issue is not in options, we accept it as a custom issue instead of rejecting!
+    if len(issue) > 100:
+        issue = issue[:97] + "..."
+
     await state.update_data(issue=issue)
     await state.set_state(DriverQuickOrderState.phone)
     await message.answer(_t(lang, "ask_phone"), reply_markup=request_phone_keyboard(lang))
@@ -299,6 +327,33 @@ async def collect_phone(message: Message, state: FSMContext) -> None:
 @router.message(DriverQuickOrderState.phone)
 async def phone_hint(message: Message, state: FSMContext) -> None:
     lang = await _get_lang(state, message.from_user.id)
+    text = (message.text or "").strip()
+
+    if text in CANCEL_BUTTONS or text == "/cancel":
+        await state.clear()
+        await state.update_data(language=lang)
+        await message.answer(_t(lang, "cancelled"), reply_markup=start_keyboard(lang))
+        return
+
+    if text == "/start":
+        await cmd_start(message, state)
+        return
+
+    # If they typed/clicked something that matches other menu items, reset state and process it
+    for key, values in BUTTONS.items():
+        if text in values.values():
+            await state.clear()
+            await state.update_data(language=lang)
+            if key == "start_order":
+                await start_quick_order(message, state)
+            elif key == "order_status":
+                await cmd_my_orders(message, state)
+            elif key == "about":
+                await cmd_about(message, state)
+            elif key == "change_lang":
+                await cmd_change_lang(message, state)
+            return
+
     await message.answer(_t(lang, "phone_hint"), reply_markup=request_phone_keyboard(lang))
 
 
@@ -324,6 +379,33 @@ async def collect_location(message: Message, state: FSMContext) -> None:
 @router.message(DriverQuickOrderState.location)
 async def location_hint(message: Message, state: FSMContext) -> None:
     lang = await _get_lang(state, message.from_user.id)
+    text = (message.text or "").strip()
+
+    if text in CANCEL_BUTTONS or text == "/cancel":
+        await state.clear()
+        await state.update_data(language=lang)
+        await message.answer(_t(lang, "cancelled"), reply_markup=start_keyboard(lang))
+        return
+
+    if text == "/start":
+        await cmd_start(message, state)
+        return
+
+    # If they typed/clicked something that matches other menu items, reset state and process it
+    for key, values in BUTTONS.items():
+        if text in values.values():
+            await state.clear()
+            await state.update_data(language=lang)
+            if key == "start_order":
+                await start_quick_order(message, state)
+            elif key == "order_status":
+                await cmd_my_orders(message, state)
+            elif key == "about":
+                await cmd_about(message, state)
+            elif key == "change_lang":
+                await cmd_change_lang(message, state)
+            return
+
     await message.answer(_t(lang, "location_hint"), reply_markup=request_location_keyboard(lang))
 
 
@@ -349,11 +431,20 @@ async def cb_confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
     lang = await _get_lang(state, callback.from_user.id)
     data = await state.get_data()
 
+    # Debounce check
+    if data.get("submitting"):
+        await callback.answer()
+        return
+
     # Validate all required data is present
     for key in ("phone", "issue", "latitude", "longitude"):
         if key not in data:
             await callback.answer(_t(lang, "incomplete"), show_alert=True)
             return
+
+    # Set submitting lock
+    await state.update_data(submitting=True)
+    await callback.answer()  # Dismiss button spinner immediately
 
     msg = _msg_safe(callback)
     if msg:
@@ -420,14 +511,101 @@ async def cb_confirm_order(callback: CallbackQuery, state: FSMContext) -> None:
 
     except Exception as exc:
         logger.exception("Order creation failed for user %s: %s", callback.from_user.id, exc)
-        await callback.answer(
-            (
-                "Texnik xatolik. Iltimos, qayta urinib ko'ring."
-                if lang == "uz"
-                else "Техническая ошибка. Пожалуйста, попробуйте снова."
-            ),
-            show_alert=True,
-        )
+        # Release the submitting lock so they can retry, but keep FSM state intact!
+        await state.update_data(submitting=False)
+        if msg:
+            try:
+                await msg.edit_text(
+                    (
+                        "❌ <b>Texnik xatolik yuz berdi.</b>\n\nIltimos, tasdiqlash tugmasini qayta bosing."
+                        if lang == "uz"
+                        else
+                        "❌ <b>Произошла техническая ошибка.</b>\n\nПожалуйста, нажмите кнопку подтверждения снова."
+                    ),
+                    reply_markup=confirm_keyboard(lang),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
         return
 
-    await callback.answer()
+
+@router.message(DriverQuickOrderState.confirm)
+async def confirm_text_handler(message: Message, state: FSMContext) -> None:
+    lang = await _get_lang(state, message.from_user.id)
+    text = (message.text or "").strip()
+
+    if text in CANCEL_BUTTONS or text == "/cancel":
+        await state.clear()
+        await state.update_data(language=lang)
+        await message.answer(_t(lang, "cancelled"), reply_markup=start_keyboard(lang))
+        return
+
+    if text == "/start":
+        await cmd_start(message, state)
+        return
+
+    # If they typed/clicked something that matches other menu items, reset state and process it
+    for key, values in BUTTONS.items():
+        if text in values.values():
+            await state.clear()
+            await state.update_data(language=lang)
+            if key == "start_order":
+                await start_quick_order(message, state)
+            elif key == "order_status":
+                await cmd_my_orders(message, state)
+            elif key == "about":
+                await cmd_about(message, state)
+            elif key == "change_lang":
+                await cmd_change_lang(message, state)
+            return
+
+    # Guide them politely to use the inline buttons
+    guide = (
+        "⚠️ Buyurtmani tasdiqlash uchun, iltimos, pastdagi <b>✅ Tasdiqlash</b> yoki <b>❌ Bekor qilish</b> tugmalaridan birini bosing."
+        if lang == "uz"
+        else
+        "⚠️ Для подтверждения заказа, пожалуйста, нажмите кнопку <b>✅ Подтвердить</b> или <b>❌ Отменить</b> ниже."
+    )
+    await message.answer(guide, parse_mode="HTML")
+
+
+@router.message(F.text)
+async def default_message_fallback(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if current_state is not None:
+        # If they are in another state, we let other handlers process it
+        return
+
+    # If the text is a command (starts with /), let the command handlers catch it
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        return
+
+    # If it matches any of the main menu buttons, let those handlers catch it
+    for values in BUTTONS.values():
+        if text in values.values():
+            return
+
+    # Treat this text as the issue description and start order flow instantly!
+    lang = await _get_lang(state, message.from_user.id)
+    
+    # Save the issue
+    if len(text) > 100:
+        text = text[:97] + "..."
+        
+    await state.clear()
+    await state.update_data(language=lang, issue=text)
+    await state.set_state(DriverQuickOrderState.phone)
+    
+    # Send quick confirmation and ask for phone
+    await message.answer(
+        f"🛠 <b>Muammo qabul qilindi:</b> {text}\n\n" + _t(lang, "ask_phone")
+        if lang == "uz"
+        else
+        f"🛠 <b>Проблема принята:</b> {text}\n\n" + _t(lang, "ask_phone"),
+        reply_markup=request_phone_keyboard(lang),
+        parse_mode="HTML"
+    )
+
+

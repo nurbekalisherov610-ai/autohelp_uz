@@ -51,11 +51,8 @@ async def sla_watchdog(bot: Bot | None) -> None:
     try:
         assigned_stale = await _fetch_stale_orders(OrderStatus.ASSIGNED, threshold_minutes=5)
         on_the_way_stale = await _fetch_stale_orders(OrderStatus.ON_THE_WAY, threshold_minutes=60)
-        awaiting_confirm_stale = await _fetch_stale_orders(
-            OrderStatus.AWAITING_CONFIRM, threshold_minutes=15
-        )
 
-        if not (assigned_stale or on_the_way_stale or awaiting_confirm_stale):
+        if not (assigned_stale or on_the_way_stale):
             return
 
         lines = ["SLA ogohlantirish:"]
@@ -66,10 +63,6 @@ async def sla_watchdog(bot: Bot | None) -> None:
         if on_the_way_stale:
             lines.append("ON_THE_WAY > 60 min:")
             lines.extend(f" - #{order.id}" for order in on_the_way_stale)
-
-        if awaiting_confirm_stale:
-            lines.append("AWAITING_CONFIRM > 15 min:")
-            lines.extend(f" - #{order.id}" for order in awaiting_confirm_stale)
 
         await _send_dispatcher_alert(bot, "\n".join(lines))
     except Exception as exc:

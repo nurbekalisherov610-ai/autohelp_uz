@@ -336,3 +336,51 @@ class NotificationService:
                     "Failed to notify dispatcher %s of completion #%s: %s",
                     target, order_id, exc
                 )
+
+    async def notify_dispatcher_master_action(
+        self,
+        *,
+        order_id: int,
+        master_name: str,
+        action: str,  # "accepted" or "rejected"
+    ) -> None:
+        """Tell dispatchers when a master accepts or rejects an assignment."""
+        emoji = "✅" if action == "accepted" else "❌"
+        action_uz = "qabul qildi" if action == "accepted" else "rad etdi"
+        action_ru = "принял заказ" if action == "accepted" else "отклонил заказ"
+        
+        text = (
+            f"{emoji} <b>👨‍🔧 Usta {master_name}</b> buyurtmani {action_uz}!\n"
+            f"🆔 Buyurtma ID: <b>#{order_id}</b>\n"
+            f"Holat: <b>{action.upper()}</b>"
+        )
+        
+        # If rejected, add a quick assign button
+        keyboard = None
+        if action == "rejected":
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"👨‍🔧 Boshqa usta biriktirish #{order_id}",
+                            callback_data=f"dispatch_assign:{order_id}",
+                        )
+                    ]
+                ]
+            )
+
+        targets = self._broadcast_targets()
+        for target in targets:
+            try:
+                await self.bot.send_message(
+                    chat_id=target,
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to notify dispatcher %s of master action %s on order #%s: %s",
+                    target, action, order_id, exc
+                )
+

@@ -49,6 +49,7 @@ MASTER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
 
 DISPATCHER_ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.AWAITING_CONFIRM: {OrderStatus.COMPLETED},
+    OrderStatus.IN_PROGRESS: {OrderStatus.COMPLETED},
 }
 
 MASTER_ACTIVE_STATUSES = {
@@ -285,7 +286,7 @@ class OrderService:
         if to_status not in allowed_next:
             raise InvalidOrderTransitionError(
                 f"Cannot transition order #{order_id} from {order.status} to {to_status}. "
-                f"Order must be in AWAITING_CONFIRM status."
+                f"Order must be in IN_PROGRESS or AWAITING_CONFIRM status."
             )
 
         if to_status == OrderStatus.COMPLETED:

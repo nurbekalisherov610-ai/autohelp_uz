@@ -86,6 +86,7 @@ async def _heal_sqlite_db(engine_: AsyncEngine) -> None:
             "ALTER TABLE order_status_history ADD COLUMN actor_telegram_id BIGINT",
             "ALTER TABLE order_status_history ADD COLUMN created_at TIMESTAMP",
             "ALTER TABLE order_status_history ADD COLUMN updated_at TIMESTAMP",
+            "CREATE INDEX IF NOT EXISTS ix_orders_client_id ON orders(client_id)",
         ],
     )
 
@@ -154,6 +155,7 @@ async def _heal_orders_table(engine_: AsyncEngine) -> None:
             "ALTER TABLE orders ALTER COLUMN arrived_at DROP NOT NULL",
             "ALTER TABLE orders ALTER COLUMN rating DROP NOT NULL",
             "ALTER TABLE orders ALTER COLUMN feedback DROP NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_orders_client_id ON orders(client_id)",
         ],
     )
 

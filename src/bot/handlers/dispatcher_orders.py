@@ -37,9 +37,13 @@ def _safe_msg(cb: CallbackQuery) -> Message | None:
     return cb.message
 
 
+def _master_display_name(telegram_id: int, db_full_name: str | None = None) -> str:
+    label = settings.parsed_master_labels_map.get(telegram_id)
+    return label if label else (db_full_name or f"ID:{telegram_id}")
+
+
 def _master_label(master_id: int) -> str:
-    m = settings.parsed_master_labels_map
-    return m.get(master_id, str(master_id))
+    return _master_display_name(master_id)
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -65,7 +69,6 @@ async def cmd_dashboard(message: Message) -> None:
         f"🚗 Yo'lda: <b>{s.get(OrderStatus.ON_THE_WAY, 0)}</b>\n"
         f"📍 Yetdi: <b>{s.get(OrderStatus.ARRIVED, 0)}</b>\n"
         f"🛠 Ishlamoqda: <b>{s.get(OrderStatus.IN_PROGRESS, 0)}</b>\n"
-        f"⏳ Tasdiq kutmoqda: <b>{s.get(OrderStatus.AWAITING_CONFIRM, 0)}</b>\n"
         f"🏁 Yakunlangan: <b>{s.get(OrderStatus.COMPLETED, 0)}</b>\n"
         f"🚫 Bekor: <b>{s.get(OrderStatus.CANCELLED, 0)}</b>\n\n"
         "Buyruqlar: /new_orders · /active_orders · /order &lt;id&gt;",
@@ -117,6 +120,18 @@ async def cmd_active_orders(message: Message) -> None:
         orders = await service.list_orders_by_status(
             list(MASTER_ACTIVE_STATUSES), limit=20
         )
+        
+        # Pre-fetch master users to avoid N+1 queries in loop
+        master_ids = [o.assigned_master_telegram_id for o in orders if o.assigned_master_telegram_id]
+        master_names = {}
+        if master_ids:
+            mu_rows = await session.scalars(
+                select(User).where(User.telegram_id.in_(master_ids))
+            )
+            master_users = {mu.telegram_id: mu for mu in mu_rows}
+            for mid in master_ids:
+                mu = master_users.get(mid)
+                master_names[mid] = _master_display_name(mid, mu.full_name if mu else None)
 
     if not orders:
         await message.answer("Faol buyurtmalar yo'q.")
@@ -124,22 +139,22 @@ async def cmd_active_orders(message: Message) -> None:
 
     for o in orders:
         buttons: list[list[InlineKeyboardButton]] = []
-        if o.status == OrderStatus.AWAITING_CONFIRM:
-            buttons.append([
-                InlineKeyboardButton(
-                    text="💰 Tasdiqlash", callback_data=f"dispatch_complete:{o.id}"
-                )
-            ])
         buttons.append([
             InlineKeyboardButton(
                 text="📋 Tafsilot", callback_data=f"dispatch_detail:{o.id}"
             )
         ])
+        
+        m_name = master_names.get(o.assigned_master_telegram_id, "—") if o.assigned_master_telegram_id else "—"
         await message.answer(
-            f"#{o.id} | <b>{o.status.name}</b> | {o.issue_label}",
+            f"🆔 <b>#{o.id}</b> | <b>{o.status.name}</b>\n"
+            f"🛠 Muammo: {o.issue_label}\n"
+            f"📞 Telefon: {o.phone}\n"
+            f"👨‍🔧 Usta: <b>{m_name}</b>",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
             parse_mode="HTML",
         )
+
 
 
 @router.message(Command("order"))
@@ -168,8 +183,7 @@ async def cmd_order_detail(message: Message) -> None:
                 master_user = await session.scalar(
                     select(User).where(User.telegram_id == order.assigned_master_telegram_id)
                 )
-                master_name = (master_user.full_name if master_user else None) or \
-                              _master_label(order.assigned_master_telegram_id)
+                master_name = _master_display_name(order.assigned_master_telegram_id, master_user.full_name if master_user else None)
     except Exception as exc:
         await message.answer(f"Xatolik: {exc}")
         return
@@ -179,10 +193,6 @@ async def cmd_order_detail(message: Message) -> None:
     if order.status in (OrderStatus.NEW, OrderStatus.REJECTED):
         buttons.append([
             InlineKeyboardButton(text="📝 Usta biriktirish", callback_data=f"dispatch_assign:{order.id}")
-        ])
-    if order.status == OrderStatus.AWAITING_CONFIRM:
-        buttons.append([
-            InlineKeyboardButton(text="💰 Tasdiqlash", callback_data=f"dispatch_complete:{order.id}")
         ])
     if order.status not in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
         buttons.append([
@@ -205,16 +215,17 @@ async def cmd_order_detail(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("dispatch_assign:"))
 async def cb_assign_order(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     uid = callback.from_user.id if callback.from_user else None
     cid = callback.message.chat.id if callback.message else None
     if not is_dispatcher(uid, cid):
-        await callback.answer("Ruxsat yo'q.", show_alert=True)
         return
 
     try:
         order_id = int((callback.data or "").split(":")[1])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     try:
@@ -223,10 +234,12 @@ async def cb_assign_order(callback: CallbackQuery) -> None:
             order = await service.get_order(order_id)
 
             if order.status not in (OrderStatus.NEW, OrderStatus.REJECTED):
-                await callback.answer(
-                    f"Buyurtma allaqachon {order.status.name} holatida.",
-                    show_alert=True,
-                )
+                msg = _safe_msg(callback)
+                if msg:
+                    try:
+                        await msg.edit_text(f"Buyurtma allaqachon {order.status.name} holatida.")
+                    except Exception:
+                        pass
                 return
 
             # Get all masters: from DB + from env config
@@ -237,7 +250,7 @@ async def cb_assign_order(callback: CallbackQuery) -> None:
 
             for mid in settings.parsed_master_ids:
                 if mid not in master_by_id:
-                    label = _master_label(mid)
+                    label = _master_display_name(mid)
                     master_by_id[mid] = User(
                         telegram_id=mid, full_name=label, is_master=True
                     )
@@ -252,17 +265,15 @@ async def cb_assign_order(callback: CallbackQuery) -> None:
 
     except Exception as exc:
         logger.exception("cb_assign_order error: %s", exc)
-        await callback.answer(str(exc)[:200], show_alert=True)
         return
 
     masters = list(master_by_id.values())
     if not masters:
-        await callback.answer("Tizimda usta yo'q.", show_alert=True)
         return
 
     keyboard: list[list[InlineKeyboardButton]] = []
     for m in masters:
-        name = m.full_name or f"ID:{m.telegram_id}"
+        name = _master_display_name(m.telegram_id, m.full_name)
         active = workload.get(m.telegram_id, 0)
         badge = "🟢 Bo'sh" if active == 0 else f"🟡 {active} ish"
         keyboard.append([
@@ -282,17 +293,18 @@ async def cb_assign_order(callback: CallbackQuery) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer()
 
 
 # ── Select master → assign ────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("select_master:"))
 async def cb_select_master(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     uid = callback.from_user.id if callback.from_user else None
     cid = callback.message.chat.id if callback.message else None
     if not is_dispatcher(uid, cid):
-        await callback.answer("Ruxsat yo'q.", show_alert=True)
         return
 
     try:
@@ -300,7 +312,6 @@ async def cb_select_master(callback: CallbackQuery) -> None:
         order_id = int(parts[1])
         master_id = int(parts[2])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     try:
@@ -328,9 +339,7 @@ async def cb_select_master(callback: CallbackQuery) -> None:
             master_user = await session.scalar(
                 select(User).where(User.telegram_id == master_id)
             )
-            master_name = (
-                (master_user.full_name if master_user else None) or _master_label(master_id)
-            )
+            master_name = _master_display_name(master_id, master_user.full_name if master_user else None)
 
             # Capture scalars before session closes
             _order_id = order.id
@@ -361,9 +370,21 @@ async def cb_select_master(callback: CallbackQuery) -> None:
         )
 
     except Exception as exc:
-        logger.exception("cb_select_master error for order #%s: %s", order_id, exc)
-        await callback.answer(str(exc)[:200], show_alert=True)
-        return
+        # Graceful check for double-tap race conditions
+        try:
+            async with AsyncSessionFactory() as session:
+                order = await session.scalar(select(Order).where(Order.id == order_id))
+                if order and order.assigned_master_telegram_id == master_id:
+                    master_user = await session.scalar(
+                        select(User).where(User.telegram_id == master_id)
+                    )
+                    master_name = _master_display_name(master_id, master_user.full_name if master_user else None)
+                    logger.info("cb_select_master: order %s already assigned to master %s, ignoring error", order_id, master_id)
+                else:
+                    raise exc
+        except Exception:
+            logger.exception("cb_select_master error for order #%s: %s", order_id, exc)
+            return
 
     msg = _safe_msg(callback)
     if msg:
@@ -374,23 +395,23 @@ async def cb_select_master(callback: CallbackQuery) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer(f"✅ {master_name} ga biriktirildi!")
 
 
 # ── Complete order (dispatcher confirms payment) ───────────────────────────────
 
 @router.callback_query(F.data.startswith("dispatch_complete:"))
 async def cb_complete_order(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     uid = callback.from_user.id if callback.from_user else None
     cid = callback.message.chat.id if callback.message else None
     if not is_dispatcher(uid, cid):
-        await callback.answer("Ruxsat yo'q.", show_alert=True)
         return
 
     try:
         order_id = int((callback.data or "").split(":")[1])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     try:
@@ -419,9 +440,17 @@ async def cb_complete_order(callback: CallbackQuery) -> None:
             )
 
     except Exception as exc:
-        logger.exception("cb_complete_order error for #%s: %s", order_id, exc)
-        await callback.answer(f"Xatolik: {exc}", show_alert=True)
-        return
+        # Graceful check for double-tap race conditions
+        try:
+            async with AsyncSessionFactory() as session:
+                order = await session.scalar(select(Order).where(Order.id == order_id))
+                if order and order.status == OrderStatus.COMPLETED:
+                    logger.info("cb_complete_order: order %s already completed, ignoring error", order_id)
+                else:
+                    raise exc
+        except Exception:
+            logger.exception("cb_complete_order error for #%s: %s", order_id, exc)
+            return
 
     msg = _safe_msg(callback)
     if msg:
@@ -432,23 +461,23 @@ async def cb_complete_order(callback: CallbackQuery) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer("✅ Tasdiqlandi!")
 
 
 # ── Cancel order ──────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("dispatch_cancel:"))
 async def cb_cancel_order(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     uid = callback.from_user.id if callback.from_user else None
     cid = callback.message.chat.id if callback.message else None
     if not is_dispatcher(uid, cid):
-        await callback.answer("Ruxsat yo'q.", show_alert=True)
         return
 
     try:
         order_id = int((callback.data or "").split(":")[1])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     try:
@@ -471,9 +500,17 @@ async def cb_cancel_order(callback: CallbackQuery) -> None:
                 status=OrderStatus.CANCELLED,
             )
     except Exception as exc:
-        logger.exception("cb_cancel_order error for #%s: %s", order_id, exc)
-        await callback.answer(f"Xatolik: {exc}", show_alert=True)
-        return
+        # Graceful check for double-tap race conditions
+        try:
+            async with AsyncSessionFactory() as session:
+                order = await session.scalar(select(Order).where(Order.id == order_id))
+                if order and order.status == OrderStatus.CANCELLED:
+                    logger.info("cb_cancel_order: order %s already cancelled, ignoring error", order_id)
+                else:
+                    raise exc
+        except Exception:
+            logger.exception("cb_cancel_order error for #%s: %s", order_id, exc)
+            return
 
     msg = _safe_msg(callback)
     if msg:
@@ -483,17 +520,18 @@ async def cb_cancel_order(callback: CallbackQuery) -> None:
             )
         except TelegramBadRequest:
             pass
-    await callback.answer("Bekor qilindi.")
 
 
 # ── Order detail inline ───────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("dispatch_detail:"))
 async def cb_order_detail(callback: CallbackQuery) -> None:
+    # 1. Answer immediately to stop spinner
+    await callback.answer()
+
     uid = callback.from_user.id if callback.from_user else None
     cid = callback.message.chat.id if callback.message else None
     if not is_dispatcher(uid, cid):
-        await callback.answer("Ruxsat yo'q.", show_alert=True)
         return
 
     try:
@@ -506,17 +544,11 @@ async def cb_order_detail(callback: CallbackQuery) -> None:
                 mu = await session.scalar(
                     select(User).where(User.telegram_id == order.assigned_master_telegram_id)
                 )
-                master_name = (mu.full_name if mu else None) or \
-                              _master_label(order.assigned_master_telegram_id)
+                master_name = _master_display_name(order.assigned_master_telegram_id, mu.full_name if mu else None)
     except Exception as exc:
-        await callback.answer(str(exc)[:200], show_alert=True)
         return
 
     buttons = []
-    if order.status == OrderStatus.AWAITING_CONFIRM:
-        buttons.append([
-            InlineKeyboardButton(text="💰 Tasdiqlash", callback_data=f"dispatch_complete:{order.id}")
-        ])
     if order.status not in (OrderStatus.COMPLETED, OrderStatus.CANCELLED):
         buttons.append([
             InlineKeyboardButton(text="🚫 Bekor", callback_data=f"dispatch_cancel:{order.id}")
@@ -525,14 +557,18 @@ async def cb_order_detail(callback: CallbackQuery) -> None:
     msg = _safe_msg(callback)
     if msg:
         try:
+            amount_str = f"\n💰 Summa: <b>{float(order.final_amount):,.0f} so'm</b>" if order.final_amount else ""
+            maps = f"https://maps.google.com/?q={order.latitude},{order.longitude}"
             await msg.edit_text(
-                f"📋 <b>#{order.id}</b> | {order.status.name}\n"
-                f"Usta: {master_name}\n"
-                f"Summa: {float(order.final_amount):,.0f} so'm" if order.final_amount else
-                f"📋 <b>#{order.id}</b> | {order.status.name}\nUsta: {master_name}",
+                f"📋 <b>Tafsilot #{order.id}</b>\n\n"
+                f"Status: <b>{order.status.name}</b>\n"
+                f"🛠 Muammo: <b>{order.issue_label}</b>\n"
+                f"📞 Telefon: <b>{order.phone}</b>\n"
+                f"👨‍🔧 Usta: <b>{master_name}</b>"
+                f"{amount_str}\n\n"
+                f'📍 <a href="{maps}">Lokatsiya (Google Maps)</a>',
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None,
                 parse_mode="HTML",
             )
         except TelegramBadRequest:
             pass
-    await callback.answer()

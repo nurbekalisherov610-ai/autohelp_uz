@@ -1,4 +1,4 @@
-﻿from decimal import Decimal
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -97,12 +97,9 @@ async def test_full_lifecycle_happy_path(session):
     order = await service.master_transition(order.id, master_id, OrderStatus.IN_PROGRESS)
     assert order.status == OrderStatus.IN_PROGRESS
 
-    order = await service.master_transition(order.id, master_id, OrderStatus.AWAITING_CONFIRM)
-    assert order.status == OrderStatus.AWAITING_CONFIRM
-
-    order = await service.dispatcher_transition(
+    order = await service.master_transition(
         order.id,
-        dispatcher_id,
+        master_id,
         OrderStatus.COMPLETED,
         final_amount=275000,
     )
@@ -139,12 +136,12 @@ async def test_master_completion_stores_video_and_amount(session):
     order = await service.master_transition(
         order.id,
         master_id,
-        OrderStatus.AWAITING_CONFIRM,
+        OrderStatus.COMPLETED,
         video_file_id="video-note-file-id",
         final_amount=125000,
     )
 
-    assert order.status == OrderStatus.AWAITING_CONFIRM
+    assert order.status == OrderStatus.COMPLETED
     assert order.video_file_id == "video-note-file-id"
     assert order.final_amount == Decimal("125000")
 
@@ -224,7 +221,6 @@ async def test_dispatcher_complete_requires_amount(session):
     await service.master_transition(order.id, master_id, OrderStatus.ON_THE_WAY)
     await service.master_transition(order.id, master_id, OrderStatus.ARRIVED)
     await service.master_transition(order.id, master_id, OrderStatus.IN_PROGRESS)
-    await service.master_transition(order.id, master_id, OrderStatus.AWAITING_CONFIRM)
 
     with pytest.raises(InvalidOrderTransitionError):
         await service.dispatcher_transition(

@@ -35,16 +35,16 @@ def _skip_kb(data: str) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data.startswith("client_rating:"))
 async def cb_rating(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()  # Dismiss button spinner immediately
+
     try:
         parts = (callback.data or "").split(":")
         order_id = int(parts[1])
         rating = int(parts[2])
     except (IndexError, ValueError):
-        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
         return
 
     if not 1 <= rating <= 5:
-        await callback.answer("Baho 1-5 orasida bo'lishi kerak.", show_alert=True)
         return
 
     try:
@@ -59,12 +59,10 @@ async def cb_rating(callback: CallbackQuery, state: FSMContext) -> None:
                 select(User).where(User.id == order.client_id)
             )
             if not client or client.telegram_id != callback.from_user.id:
-                await callback.answer("Siz bu buyurtmaga baho bera olmaysiz.", show_alert=True)
                 return
             await service.save_feedback(order_id, rating=rating)
     except Exception as exc:
         logger.exception("Rating save failed for #%s: %s", order_id, exc)
-        await callback.answer(str(exc)[:200], show_alert=True)
         return
 
     stars = "⭐" * rating
@@ -82,11 +80,11 @@ async def cb_rating(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.update_data(feedback_order_id=order_id)
     await state.set_state(ClientFeedbackState.waiting_for_text)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("skip_feedback:"))
 async def cb_skip_feedback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()  # Dismiss button spinner immediately
     try:
         order_id = int((callback.data or "").split(":")[1])
     except (IndexError, ValueError):
@@ -99,11 +97,11 @@ async def cb_skip_feedback(callback: CallbackQuery, state: FSMContext) -> None:
             await msg.edit_text("Bahoyingiz uchun rahmat! / Спасибо за оценку! 🙏")
         except Exception:
             pass
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("skip_shortcomings:"))
 async def cb_skip_shortcomings(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()  # Dismiss button spinner immediately
     await state.clear()
     msg = _safe_msg(callback)
     if msg:
@@ -111,17 +109,73 @@ async def cb_skip_shortcomings(callback: CallbackQuery, state: FSMContext) -> No
             await msg.edit_text("Fikr-mulohazangiz uchun rahmat! / Спасибо за отзыв! 🙏")
         except Exception:
             pass
-    await callback.answer()
+
+
+async def _check_fsm_cancel_or_menu(message: Message, state: FSMContext, text: str) -> bool:
+    from src.bot.keyboards.driver import CANCEL_BUTTONS, BUTTONS, start_keyboard, normalize_language
+    
+    async def _get_lang(user_id: int) -> str:
+        data = await state.get_data()
+        if lang := data.get("language"):
+            return normalize_language(lang)
+        async with AsyncSessionFactory() as session:
+            from src.db.models.user import User
+            from sqlalchemy import select
+            user = await session.scalar(select(User).where(User.telegram_id == user_id))
+            return normalize_language(user.language if user else None)
+
+    if text in CANCEL_BUTTONS or text == "/cancel":
+        lang = await _get_lang(message.from_user.id)
+        await state.clear()
+        await state.update_data(language=lang)
+        await message.answer(
+            "Bekor qilindi." if lang == "uz" else "Отменено.",
+            reply_markup=start_keyboard(lang)
+        )
+        return True
+
+    if text == "/start":
+        from src.bot.handlers.driver_quick_order import cmd_start
+        await cmd_start(message, state)
+        return True
+
+    for key, values in BUTTONS.items():
+        if text in values.values():
+            lang = await _get_lang(message.from_user.id)
+            await state.clear()
+            await state.update_data(language=lang)
+            if key == "start_order":
+                from src.bot.handlers.driver_quick_order import start_quick_order
+                await start_quick_order(message, state)
+            elif key == "order_status":
+                from src.bot.handlers.driver_quick_order import cmd_my_orders
+                await cmd_my_orders(message, state)
+            elif key == "about":
+                from src.bot.handlers.driver_quick_order import cmd_about
+                await cmd_about(message, state)
+            elif key == "change_lang":
+                from src.bot.handlers.driver_quick_order import cmd_change_lang
+                await cmd_change_lang(message, state)
+            return True
+
+    return False
 
 
 @router.message(ClientFeedbackState.waiting_for_text)
 async def process_feedback_text(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if await _check_fsm_cancel_or_menu(message, state, text):
+        return
+
     data = await state.get_data()
     order_id = data.get("feedback_order_id")
     if order_id:
         try:
+            feedback_text = text
+            if len(feedback_text) > 1000:
+                feedback_text = feedback_text[:997] + "..."
             async with AsyncSessionFactory() as session:
-                await OrderService(session).save_feedback(order_id, feedback_text=message.text)
+                await OrderService(session).save_feedback(order_id, feedback_text=feedback_text)
         except Exception as exc:
             logger.error("Feedback text save error #%s: %s", order_id, exc)
 
@@ -134,12 +188,19 @@ async def process_feedback_text(message: Message, state: FSMContext) -> None:
 
 @router.message(ClientFeedbackState.waiting_for_shortcomings)
 async def process_shortcomings(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if await _check_fsm_cancel_or_menu(message, state, text):
+        return
+
     data = await state.get_data()
     order_id = data.get("feedback_order_id")
     if order_id:
         try:
+            shortcomings = text
+            if len(shortcomings) > 1000:
+                shortcomings = shortcomings[:997] + "..."
             async with AsyncSessionFactory() as session:
-                await OrderService(session).save_feedback(order_id, shortcomings=message.text)
+                await OrderService(session).save_feedback(order_id, shortcomings=shortcomings)
         except Exception as exc:
             logger.error("Shortcomings save error #%s: %s", order_id, exc)
 

@@ -59,7 +59,7 @@ async def cmd_admin(message: Message) -> None:
                 Order.status.in_([
                     OrderStatus.NEW, OrderStatus.ASSIGNED, OrderStatus.ACCEPTED,
                     OrderStatus.ON_THE_WAY, OrderStatus.ARRIVED,
-                    OrderStatus.IN_PROGRESS, OrderStatus.AWAITING_CONFIRM,
+                    OrderStatus.IN_PROGRESS,
                 ])
             )
         ) or 0
@@ -140,7 +140,7 @@ async def cmd_admin_masters(message: Message) -> None:
             select(Order.assigned_master_telegram_id, func.count(Order.id))
             .where(Order.status.in_([
                 OrderStatus.ASSIGNED, OrderStatus.ACCEPTED, OrderStatus.ON_THE_WAY,
-                OrderStatus.ARRIVED, OrderStatus.IN_PROGRESS, OrderStatus.AWAITING_CONFIRM,
+                OrderStatus.ARRIVED, OrderStatus.IN_PROGRESS,
             ]))
             .where(Order.assigned_master_telegram_id.isnot(None))
             .group_by(Order.assigned_master_telegram_id)

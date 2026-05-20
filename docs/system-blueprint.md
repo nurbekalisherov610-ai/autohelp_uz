@@ -27,7 +27,6 @@ Recommended lifecycle:
 - `ON_THE_WAY`
 - `ARRIVED`
 - `IN_PROGRESS`
-- `AWAITING_CONFIRM`
 - `COMPLETED`
 - `CANCELLED`
 - `REJECTED`
@@ -35,7 +34,6 @@ Recommended lifecycle:
 Enforcement rules:
 - only dispatcher can move `NEW -> ASSIGNED`
 - only assigned master can move `ASSIGNED -> ACCEPTED/REJECTED`
-- only dispatcher can confirm final amount in `AWAITING_CONFIRM`
 - status changes are append-only in `order_status_history`
 
 ## 4) Driver Quick Registration Flow
